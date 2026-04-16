@@ -3,7 +3,7 @@ const http = require('http');
 
 const port = process.env.PORT || 8080;
 const server = http.createServer((req, res) => {
-    res.writeHead(200); res.end('KopRadar Genis Fikstur Motoru Aktif');
+    res.writeHead(200); res.end('KopRadar Dedektor Aktif');
 });
 server.listen(port);
 
@@ -13,37 +13,9 @@ const bot = new TelegramBot(token, {polling: true});
 const API_KEY = "e7ac9a7866864265a83bd3b463cf86af";
 const MY_CHAT_ID = "1094416843"; 
 
-// 🌍 GENİŞLETİLMİŞ LİG HAVUZU (TOPLAM 26 LİG)
-const TARGET_LEAGUES = [
-    // İNGİLTERE
-    39, 40, 41,     // Premier League, Championship, League One
-    // AVRUPA KUPALARI
-    2, 3, 848,      // Şampiyonlar Ligi, Avrupa Ligi, Konferans Ligi
-    // İSPANYA
-    140, 141,       // La Liga, La Liga 2
-    // İTALYA
-    78, 79,         // Serie A, Serie B
-    // ALMANYA
-    135, 136,       // Bundesliga, 2. Bundesliga
-    // FRANSA
-    61, 62,         // Ligue 1, Ligue 2
-    // TÜRKİYE
-    203, 204,       // Süper Lig, 1. Lig
-    // BREZİLYA
-    71, 72,         // Serie A, Serie B
-    // DİĞER AVRUPA 1. LİGLERİ
-    88,             // Hollanda Eredivisie
-    94,             // Portekiz Primeira Liga
-    119,            // Danimarka Superliga
-    144,            // Belçika Pro League
-    179,            // İskoçya Premiership
-    197,            // İsviçre Super League
-    218,            // Avusturya Bundesliga
-    136             // Yunanistan Super League 1
-]; 
+const TARGET_LEAGUES = [39, 40, 41, 2, 3, 848, 140, 141, 78, 79, 135, 136, 61, 62, 203, 204, 71, 72, 88, 94, 119, 144, 179, 197, 218, 136]; 
 
 function getRandomFloat(min, max) { return (Math.random() * (max - min) + min).toFixed(2); }
-
 function getDate(daysToAdd = 0) {
     const date = new Date();
     date.setDate(date.getDate() + daysToAdd);
@@ -64,19 +36,31 @@ async function generateValueCoupon() {
         });
         let dataToday = await resToday.json();
         
+        // HATA DEDEKTÖRÜ KONTROLÜ (API bize maç yerine hata yolladıysa yakala)
+        if(dataToday.errors && Object.keys(dataToday.errors).length > 0) {
+            let hataMesaji = Object.values(dataToday.errors)[0];
+            return `❌ **API SİSTEMİNDEN REDDEDİLDİK!**\nSebep: *${hataMesaji}*\n_(Muhtemelen günlük 100 sorgu bedava kotan doldu. Yeni kota gece Türkiye saatiyle 03:00'te yenilenir.)_`;
+        }
+        
         if(dataToday.response) {
             upcomingMatches = dataToday.response.filter(m => 
                 TARGET_LEAGUES.includes(m.league.id) && m.fixture.status.short === "NS"
             );
         }
 
-        // 2. YARININ MAÇLARI (Eğer bugün yeterli maç yoksa)
+        // 2. YARININ MAÇLARI
         if(upcomingMatches.length < 3) {
             let resTomorrow = await fetch(`https://v3.football.api-sports.io/fixtures?date=${tomorrow}`, {
                 method: "GET", headers: { "x-apisports-key": API_KEY }
             });
             let dataTomorrow = await resTomorrow.json();
             
+            // Yarın için de hata kontrolü
+            if(dataTomorrow.errors && Object.keys(dataTomorrow.errors).length > 0) {
+                let hataMesaji = Object.values(dataTomorrow.errors)[0];
+                return `❌ **API SİSTEMİNDEN REDDEDİLDİK (Yarının Verisi)!**\nSebep: *${hataMesaji}*`;
+            }
+
             if(dataTomorrow.response) {
                 let tomorrowMatches = dataTomorrow.response.filter(m => 
                     TARGET_LEAGUES.includes(m.league.id) && m.fixture.status.short === "NS"
@@ -85,7 +69,7 @@ async function generateValueCoupon() {
             }
         }
 
-        if(upcomingMatches.length < 3) return `Geniş havuzda (26 Lig) bile bugün ve yarın için bültende yeterli sayıda (Başlamamış) maç bulunamadı. Lütfen hafta sonu tekrar deneyin.`;
+        if(upcomingMatches.length < 3) return `Bugün ve yarın için bültende yeterli (Başlamamış) maç bulunamadı. (Gerçekten maç yokmuş)`;
 
         let valueBets = [];
 
@@ -150,10 +134,10 @@ bot.onText(/\/kupon/, async (msg) => {
     const chatId = msg.chat.id;
     if(MY_CHAT_ID !== "BURAYA_KENDI_ID_RAKAMLARINI_YAZ" && chatId.toString() !== MY_CHAT_ID) return;
 
-    bot.sendMessage(chatId, "🤖 **Genişletilmiş Fikstür Taranıyor...**\n26 farklı ligin oynanmamış maçları analiz ediliyor...", {parse_mode: 'Markdown'});
+    bot.sendMessage(chatId, "🤖 **Sistem Taranıyor...** Lütfen bekleyin.", {parse_mode: 'Markdown'});
     
     let result = await generateValueCoupon();
-    if(typeof result === "string") return bot.sendMessage(chatId, `⚠️ ${result}`);
+    if(typeof result === "string") return bot.sendMessage(chatId, result, {parse_mode: 'Markdown'});
 
     let finalMessage = `✅ **GÜNÜN XG & VALUE BET KUPONU** ✅\n\n`;
     result.matches.forEach((m, index) => {
@@ -169,4 +153,4 @@ bot.onText(/\/kupon/, async (msg) => {
     bot.sendMessage(chatId, finalMessage, {parse_mode: 'Markdown'});
 });
 
-console.log("KopRadar Geniş Fikstür Motoru Başlatıldı!");
+console.log("Hata Dedektörlü Motor Başlatıldı!");
