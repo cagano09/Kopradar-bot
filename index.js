@@ -10,7 +10,7 @@ server.listen(port);
 const token = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
 const bot = new TelegramBot(token, {polling: true});
 
-const API_KEY = "e7ac9a7866864265a83bd3b463cf86af";
+const API_KEY = "03db271be167e3dab49874e3fdb1de5f";
 const MY_CHAT_ID = "1094416843"; 
 
 const TARGET_LEAGUES = [39, 40, 41, 2, 3, 848, 140, 141, 78, 79, 135, 136, 61, 62, 203, 204, 71, 72, 88, 94, 119, 144, 179, 197, 218, 136]; 
