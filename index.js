@@ -19,7 +19,7 @@ const apiClient = axios.create({
     }
 });
 
-// Tarihi API'nin istediği YYYYMMDD (Örn: 20241107) formatına çevirir
+// Tarih Formatlayıcı (Tiresiz: 20260421)
 function getFormattedDate(offset = 0) {
     const d = new Date();
     d.setDate(d.getDate() + offset);
@@ -27,6 +27,13 @@ function getFormattedDate(offset = 0) {
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${year}${month}${day}`;
+}
+
+// Tarih Formatlayıcı (Tireli: 2026-04-21)
+function getTireliDate(offset = 0) {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return d.toISOString().split('T')[0];
 }
 
 // ================= ANALİZ MOTORU =================
@@ -38,10 +45,9 @@ async function getAnalysis(matchId) {
 
         if (!match) return null;
 
-        // HARMANLAMA MANTIĞI (%40 Genel Form + %60 Saha Avantajı)
-        // Not: Ücretsiz API'den detaylı geçmiş gelmezse temel puanlama yapılır
-        const hForm = 10; const aForm = 8;
-        const hVenue = 12; const aVenue = 5;
+        // HARMANLAMA MANTIĞI (%40 Genel + %60 Saha)
+        const hForm = 10; const hVenue = 12;
+        const aForm = 8; const aVenue = 5;
 
         const homePower = (hForm * 0.4) + (hVenue * 0.6);
         const awayPower = (aForm * 0.4) + (aVenue * 0.6);
@@ -51,51 +57,55 @@ async function getAnalysis(matchId) {
         else if (awayPower - homePower > 1.8) winner = "DEPLASMAN (2) ✈️";
 
         return {
-            home: match.home_team_name || "Ev Sahibi",
-            away: match.away_team_name || "Deplasman",
+            home: match.home_team_name,
+            away: match.away_team_name,
             winner,
             goals: (homePower + awayPower) / 8 > 2.2 ? "2.5 ÜST ⚽" : "2.5 ALT 🛡️",
             hP: homePower.toFixed(1),
             aP: awayPower.toFixed(1)
         };
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📅 Bülten taranıyor (Bugün ve Yarın)...");
+    bot.sendMessage(msg.chat.id, "🔍 Bülten derinlemesine taranıyor (Çift tarih formatı deneniyor)...");
 
     try {
-        // Hem bugün hem yarın için maçları çekiyoruz
-        const dates = [getFormattedDate(0), getFormattedDate(1)];
-        let allMatches = [];
+        // 1. DENEME: Tiresiz Format (Senin curl örneğin)
+        const date1 = getFormattedDate(0);
+        let resp = await apiClient.get('/football-get-matches-by-date', { params: { date: date1 } });
+        let matches = resp.data.results || resp.data.data;
 
-        for (let dateParam of dates) {
-            const resp = await apiClient.get('/football-get-matches-by-date', { 
-                params: { date: dateParam } 
-            });
-            if (resp.data && resp.data.results) {
-                allMatches = allMatches.concat(resp.data.results);
-            }
+        // 2. DENEME: Eğer boşsa Tireli Formatı dene
+        if (!matches || (Array.isArray(matches) && matches.length === 0)) {
+            const date2 = getTireliDate(0);
+            resp = await apiClient.get('/football-get-matches-by-date', { params: { date: date2 } });
+            matches = resp.data.results || resp.data.data;
         }
 
-        if (allMatches.length === 0) {
-            return bot.sendMessage(msg.chat.id, "⚠️ Bülten boş. API henüz maçları güncellememiş olabilir.");
+        // 3. DENEME: Hala boşsa Yarını dene (Tiresiz)
+        if (!matches || (Array.isArray(matches) && matches.length === 0)) {
+            const date3 = getFormattedDate(1);
+            resp = await apiClient.get('/football-get-matches-by-date', { params: { date: date3 } });
+            matches = resp.data.results || resp.data.data;
         }
 
-        let report = "📋 *GÜNÜN MAÇ LİSTESİ*\n\n";
-        allMatches.slice(0, 35).forEach(m => {
+        if (!matches || (Array.isArray(matches) && matches.length === 0)) {
+            return bot.sendMessage(msg.chat.id, `⚠️ Veri bulunamadı.\nAPI Ham Yanıtı: ${JSON.stringify(resp.data).substring(0, 100)}`);
+        }
+
+        let report = "📋 *GÜNCEL MAÇ LİSTESİ*\n\n";
+        matches.slice(0, 30).forEach(m => {
             report += `🆔 \`${m.match_id}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
         });
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
 
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı. Lütfen API bağlantısını kontrol edin.");
+        bot.sendMessage(msg.chat.id, "❌ API Hatası: " + e.message);
     }
 });
 
@@ -104,7 +114,7 @@ bot.on('message', async (msg) => {
     if (!isNaN(text) && text.length >= 5) {
         bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
         const res = await getAnalysis(text);
-        if (!res) return bot.sendMessage(msg.chat.id, "❌ Detaylar alınamadı.");
+        if (!res) return bot.sendMessage(msg.chat.id, "❌ Maç detayları alınamadı.");
 
         let report = `📊 *ANALİZ: ${res.home} - ${res.away}*\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
@@ -118,6 +128,6 @@ bot.on('message', async (msg) => {
     }
 });
 
-// ================= SUNUCU =================
-http.createServer((req, res) => { res.end('KopRadar Aktif'); }).listen(PORT);
-console.log("KopRadar botu %100 uyumlu URL ile başlatıldı!");
+// Render Sunucusu
+http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
+console.log("KopRadar Botu Enjekte Edilmiş Kodla Başlatıldı!");
