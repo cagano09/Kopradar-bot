@@ -18,73 +18,69 @@ const apiClient = axios.create({
     }
 });
 
-// Tarih formatını API'nin istediği şekle (YYYYMMDD) çeviren fonksiyon
-function getApiDate() {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}${m}${day}`;
-}
-
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📅 Günün bülteni hazırlanıyor...");
+    bot.sendMessage(msg.chat.id, "🔍 Bülten taranıyor...");
 
     try {
-        const targetDate = getApiDate();
-        // Görüntüdeki kesinleşen endpoint: /football-get-matches-by-date
-        const resp = await apiClient.get('/football-get-matches-by-date', { 
-            params: { date: targetDate } 
+        // Bugünün tarihini API'nin sevdiği formata getirelim
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        
+        const dateStr = `${year}-${month}-${day}`; // 2026-04-21 formatı
+
+        // Senin API'ndeki dökümana göre en olası endpoint:
+        const resp = await apiClient.get('/football-get-all-matches-by-date', { 
+            params: { date: dateStr } 
         });
 
-        const matches = resp.data.results || resp.data.data;
+        // Debug: API'den gelen ham yanıtı görelim (Boş mu değil mi?)
+        console.log("API Yanıtı:", JSON.stringify(resp.data));
 
-        if (!matches || matches.length === 0) {
-            return bot.sendMessage(msg.chat.id, "⚠️ Bugün için oynanacak maç verisi bulunamadı.");
+        const matches = resp.data.results || resp.data.data || resp.data.response;
+
+        if (!matches || (Array.isArray(matches) && matches.length === 0)) {
+            return bot.sendMessage(msg.chat.id, `⚠️ API bağlandı ama bugün (${dateStr}) için veri boş döndü. Henüz maçlar bültene düşmemiş olabilir.`);
         }
 
         let report = "📋 *GÜNÜN MAÇ LİSTESİ*\n\n";
-        matches.slice(0, 25).forEach(m => {
+        matches.slice(0, 30).forEach(m => {
             const mId = m.match_id || m.id;
-            report += `🆔 \`${mId}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
+            const hName = m.home_team_name || m.home_team;
+            const aName = m.away_team_name || m.away_team;
+            report += `🆔 \`${mId}\` | ${hName} - ${aName}\n`;
         });
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı. Hata: " + e.message);
+        let errorDetail = e.response ? JSON.stringify(e.response.data) : e.message;
+        bot.sendMessage(msg.chat.id, "❌ Liste Hatası: " + errorDetail);
     }
 });
 
-// ID ile analiz tetikleme
+// Analiz Dinleyicisi
 bot.on('message', async (msg) => {
     const text = msg.text ? msg.text.trim() : "";
     if (!isNaN(text) && text.length >= 5) {
-        bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
+        bot.sendMessage(msg.chat.id, "🧠 Veriler harmanlanıyor...");
         try {
-            // Maç detayları için de ekran görüntüsündeki mantığa uygun yol
-            const resp = await apiClient.get('/football-get-matches-by-id', { params: { matchid: text } });
-            const match = resp.data.results || resp.data.data;
+            const resp = await apiClient.get('/football-get-match-details', { params: { matchid: text } });
+            const d = resp.data.results || resp.data.data;
+            
+            if(!d) throw new Error("Veri yok");
 
-            if (!match) throw new Error("Detay yok");
-
-            // Harmanlama Formülü (%40 Genel + %60 Saha)
-            const hPower = (10 * 0.4) + (12 * 0.6); // Örnek katsayılar
-            const aPower = (8 * 0.4) + (5 * 0.6);
-
-            let report = `📊 *ANALİZ: ${match.home_team_name} - ${match.away_team_name}*\n`;
-            report += `🏆 *KARAR:* ${hPower > aPower ? "EV SAHİBİ (1)" : "DEPLASMAN (2)"}\n`;
-            report += `⚽ *GOL:* 2.5 ÜST BEKLENTİSİ\n`;
-            report += `📈 *Güç:* E ${hPower.toFixed(1)} - D ${aPower.toFixed(1)}`;
-
-            bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+            bot.sendMessage(msg.chat.id, `📊 *ANALİZ TAMAMLANDI*\n⚽ ${d.home_team_name} vs ${d.away_team_name}\n🏆 Tahmin: Veri yetersiz, manuel kontrol gerek.`);
         } catch (e) {
-            bot.sendMessage(msg.chat.id, "❌ Maç analizi için yeterli veri çekilemedi.");
+            bot.sendMessage(msg.chat.id, "❌ Bu maç için detaylı analiz verisi şu an eksik.");
         }
     }
 });
 
+// Sunucu
 http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
-console.log("Bot tam uyumlu modda başlatıldı.");
+console.log("Bot 2026 sürümüyle yayında!");
