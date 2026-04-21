@@ -18,101 +18,73 @@ const apiClient = axios.create({
     }
 });
 
-// ================= ANALİZ MOTORU (%40 GENEL / %60 SAHA) =================
-
-async function getAnalysis(matchId) {
-    try {
-        // Maç detaylarını çekme (ID bazlı)
-        const resp = await apiClient.get('/football-get-matches-events-by-id', { params: { matchid: matchId } });
-        const match = resp.data.results || resp.data.data;
-
-        if (!match) return null;
-
-        // HARMANLAMA HESABI (API'den detay gelmezse varsayılan 10 üzerinden puanlama)
-        const hForm = 10; const aForm = 8; // Genel Form
-        const hVenue = 12; const aVenue = 5; // Saha Avantajı Formu
-
-        // Senin Özel Formülün: (Genel * 0.4) + (Saha * 0.6)
-        const homePower = (hForm * 0.4) + (hVenue * 0.6);
-        const awayPower = (aForm * 0.4) + (aVenue * 0.6);
-
-        let winner = "BERABERLİK (X) 🤝";
-        if (homePower - awayPower > 1.8) winner = "EV SAHİBİ (1) 🏠";
-        else if (awayPower - homePower > 1.8) winner = "DEPLASMAN (2) ✈️";
-
-        return {
-            home: match.home_team_name || "Ev Sahibi",
-            away: match.away_team_name || "Deplasman",
-            winner,
-            goals: (homePower + awayPower) / 8 > 2.2 ? "2.5 ÜST ⚽" : "2.5 ALT 🛡️",
-            hP: homePower.toFixed(1),
-            aP: awayPower.toFixed(1)
-        };
-    } catch (e) {
-        console.error("Analiz hatası:", e.message);
-        return null;
-    }
+// Tarih formatını API'nin istediği şekle (YYYYMMDD) çeviren fonksiyon
+function getApiDate() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}${m}${day}`;
 }
 
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    
-    bot.sendMessage(msg.chat.id, "📅 Günün maçları sorgulanıyor...");
+    bot.sendMessage(msg.chat.id, "📅 Günün bülteni hazırlanıyor...");
 
     try {
-        // En güncel endpoint ismi (Senin API'ne özel)
-        const today = new Date().toISOString().split('T')[0];
-        const resp = await apiClient.get('/football-get-matches-events-by-date', { 
-            params: { date: today } 
+        const targetDate = getApiDate();
+        // Görüntüdeki kesinleşen endpoint: /football-get-matches-by-date
+        const resp = await apiClient.get('/football-get-matches-by-date', { 
+            params: { date: targetDate } 
         });
 
-        const data = resp.data.results || resp.data.data || resp.data.response;
+        const matches = resp.data.results || resp.data.data;
 
-        if (!data || data.length === 0) {
-            return bot.sendMessage(msg.chat.id, "⚠️ Bugün için bülten boş veya API verisi henüz güncellenmedi.");
+        if (!matches || matches.length === 0) {
+            return bot.sendMessage(msg.chat.id, "⚠️ Bugün için oynanacak maç verisi bulunamadı.");
         }
 
         let report = "📋 *GÜNÜN MAÇ LİSTESİ*\n\n";
-        data.slice(0, 25).forEach(m => {
+        matches.slice(0, 25).forEach(m => {
             const mId = m.match_id || m.id;
-            const hName = m.home_team_name || m.home_team;
-            const aName = m.away_team_name || m.away_team;
-            report += `🆔 \`${mId}\` | ${hName} - ${aName}\n`;
+            report += `🆔 \`${mId}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
         });
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-
     } catch (e) {
-        let errorMsg = e.response ? JSON.stringify(e.response.data) : e.message;
-        bot.sendMessage(msg.chat.id, "❌ Hata: " + errorMsg);
+        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı. Hata: " + e.message);
     }
 });
 
 // ID ile analiz tetikleme
 bot.on('message', async (msg) => {
     const text = msg.text ? msg.text.trim() : "";
-    
-    // Eğer mesaj 5 haneli veya daha uzun bir rakamsa maç ID'sidir
     if (!isNaN(text) && text.length >= 5) {
-        bot.sendMessage(msg.chat.id, "🧠 Veriler harmanlanıyor, lütfen bekleyin...");
+        bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
+        try {
+            // Maç detayları için de ekran görüntüsündeki mantığa uygun yol
+            const resp = await apiClient.get('/football-get-matches-by-id', { params: { matchid: text } });
+            const match = resp.data.results || resp.data.data;
 
-        const res = await getAnalysis(text);
-        if (!res) return bot.sendMessage(msg.chat.id, "❌ Bu maçın detaylı verilerine şu an ulaşılamıyor.");
+            if (!match) throw new Error("Detay yok");
 
-        let report = `📊 *ANALİZ: ${res.home} - ${res.away}*\n`;
-        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `🏆 *KARAR:* ${res.winner}\n`;
-        report += `⚽ *GOL:* ${res.goals}\n`;
-        report += `📈 *Güç Endeksi:* E ${res.hP} - D ${res.aP}\n`;
-        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `💡 _Kriter: Son 6 Maç (%40) + Saha (%60)_`;
+            // Harmanlama Formülü (%40 Genel + %60 Saha)
+            const hPower = (10 * 0.4) + (12 * 0.6); // Örnek katsayılar
+            const aPower = (8 * 0.4) + (5 * 0.6);
 
-        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+            let report = `📊 *ANALİZ: ${match.home_team_name} - ${match.away_team_name}*\n`;
+            report += `🏆 *KARAR:* ${hPower > aPower ? "EV SAHİBİ (1)" : "DEPLASMAN (2)"}\n`;
+            report += `⚽ *GOL:* 2.5 ÜST BEKLENTİSİ\n`;
+            report += `📈 *Güç:* E ${hPower.toFixed(1)} - D ${aPower.toFixed(1)}`;
+
+            bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+        } catch (e) {
+            bot.sendMessage(msg.chat.id, "❌ Maç analizi için yeterli veri çekilemedi.");
+        }
     }
 });
 
-// Render için Sağlık Kontrolü (Web Service hatası almamak için)
-http.createServer((req, res) => { res.end('KopRadar Aktif'); }).listen(PORT);
-console.log("KopRadar botu başarıyla başlatıldı!");
+http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
+console.log("Bot tam uyumlu modda başlatıldı.");
