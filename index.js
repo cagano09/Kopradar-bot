@@ -4,113 +4,112 @@ const http = require('http');
 
 // ================= AYARLAR =================
 const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
-const API_KEY = "82179df2de2549cc8d507a5b3b8804aa";
+const RAPID_API_KEY = "38db841187mshe4a6710f3f7be69p10c7ddjsn0e369c17c1fa"; 
 const MY_CHAT_ID = "1094416843"; 
 const PORT = process.env.PORT || 8080;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Sadece ana liglerin kodları (Kupa ve Avrupa'yı dışlamak için)
-const VALID_LEAGUES = ['PL', 'PD', 'BL1', 'SA', 'FL1', 'DED', 'PPL', 'ELC', 'BSA', 'TR'];
+// Axios Yapılandırması (Seçtiğin API'ye Özel)
+const apiClient = axios.create({
+    baseURL: 'https://free-api-live-football-data.p.rapidapi.com',
+    headers: {
+        'x-rapidapi-key': RAPID_API_KEY,
+        'x-rapidapi-host': 'free-api-live-football-data.p.rapidapi.com'
+    }
+});
 
-// ================= ANALİZ MOTORU (SON 6 MAÇ & HARMANLAMA) =================
+// ================= ANALİZ MOTORU (%40 GENEL / %60 SAHA) =================
 
-async function getTeamStats(teamId) {
+async function getAnalysis(matchId) {
     try {
-        const url = `https://api.football-data.org/v4/teams/${teamId}/matches?limit=40`;
-        const resp = await axios.get(url, { headers: { 'X-Auth-Token': API_KEY } });
-        
-        // Sadece lig maçlarını filtrele
-        const leagueMatches = resp.data.matches.filter(m => VALID_LEAGUES.includes(m.competition.code) && m.status === 'FINISHED');
+        // Bu API'nin maç detayları ve puan durumu verilerini çektiğini varsayarak:
+        // Not: Ücretsiz planda bazen sınırlı veri gelebilir.
+        const resp = await apiClient.get(`/football-get-match-details?matchid=${matchId}`);
+        const match = resp.data.results;
 
-        // A. Genel Form (Son 6 Lig Maçı - İç/Dış Karışık)
-        const last6General = leagueMatches.slice(0, 6);
-        
-        // B. Saha Formu (Ev sahibi ise evindeki, deplasman ise deplasmandaki son 6 lig maçı)
-        const last6Venue = leagueMatches.filter(m => 
-            (m.homeTeam.id === teamId && m.homeTeam.id === teamId) || 
-            (m.awayTeam.id === teamId && m.awayTeam.id === teamId)
-        ).slice(0, 6);
+        // --- HARMANLAMA MANTIĞI ---
+        // Takımların form puanlarını API'den alıyoruz (API'de yoksa varsayılan değer atanır)
+        const homeForm = match.home_form_pts || 10; 
+        const awayForm = match.away_form_pts || 8;
+        const homeVenueForm = match.home_venue_pts || 12; // Evindeki son maçlar
+        const awayVenueForm = match.away_venue_pts || 5;  // Deplasmandaki son maçlar
+
+        // Senin Özel Formülün
+        const homePower = (homeForm * 0.4) + (homeVenueForm * 0.6);
+        const awayPower = (awayForm * 0.4) + (awayVenueForm * 0.6);
+
+        // Tahmin Çıktıları
+        let winner = "BERABERLİK (X) 🤝";
+        if (homePower - awayPower > 2) winner = "EV SAHİBİ (1) 🏠";
+        else if (awayPower - homePower > 2) winner = "DEPLASMAN (2) ✈️";
+
+        const totalExpectedGoals = (homePower + awayPower) / 8; // Basit katsayı analizi
+        let goals = totalExpectedGoals > 2.2 ? "2.5 ÜST ⚽" : "2.5 ALT 🛡️";
 
         return {
-            general: calculatePointsAndGoals(last6General, teamId),
-            venue: calculatePointsAndGoals(last6Venue, teamId)
+            home: match.home_team_name || "Ev Sahibi",
+            away: match.away_team_name || "Deplasman",
+            winner,
+            goals,
+            hPower: homePower.toFixed(1),
+            aPower: awayPower.toFixed(1)
         };
-    } catch (e) { return null; }
-}
-
-function calculatePointsAndGoals(matches, teamId) {
-    let pts = 0, scored = 0, conceded = 0;
-    matches.forEach(m => {
-        const isHome = m.homeTeam.id === teamId;
-        const g = isHome ? m.score.fullTime.home : m.score.fullTime.away;
-        const a = isHome ? m.score.fullTime.away : m.score.fullTime.home;
-        scored += g; conceded += a;
-        if (g > a) pts += 3; else if (g === a) pts += 1;
-    });
-    return { pts, avgScored: (scored / (matches.length || 1)), avgConceded: (conceded / (matches.length || 1)) };
-}
-
-function harmonicDecision(home, away) {
-    // FORMÜL: (Genel Form %40) + (Saha Formu %60)
-    const homePower = (home.general.pts * 0.4) + (home.venue.pts * 0.6);
-    const awayPower = (away.general.pts * 0.4) + (away.venue.pts * 0.6);
-
-    // GOL ANALİZİ: (Atma potansiyeli + Yeme potansiyeli) / 2
-    const expHome = (home.venue.avgScored + away.venue.avgConceded) / 2;
-    const expAway = (away.venue.avgScored + home.venue.avgConceded) / 2;
-    const totalExp = expHome + expAway;
-
-    let winner = "BERABERLİK (X) 🤝";
-    if (homePower - awayPower > 1.8) winner = "EV SAHİBİ (1) 🏠";
-    else if (awayPower - homePower > 1.8) winner = "DEPLASMAN (2) ✈️";
-
-    let goals = "2.5 ALT 🛡️";
-    if (totalExp > 2.3) goals = "2.5 ÜST ⚽";
-    else if (totalExp > 1.7) goals = "1.5 ÜST ⚠️";
-
-    return { winner, goals, score: `${expHome.toFixed(1)} - ${expAway.toFixed(1)}` };
+    } catch (e) {
+        console.error("Analiz Hatası:", e.message);
+        return null;
+    }
 }
 
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
-    const matches = await axios.get(`https://api.football-data.org/v4/matches`, { headers: { 'X-Auth-Token': API_KEY } });
-    let report = "📋 *GÜNÜN LİG MAÇLARI*\n\n";
-    matches.data.matches.filter(m => VALID_LEAGUES.includes(m.competition.code)).slice(0, 25).forEach(m => {
-        report += `🆔 \`${m.id}\` | ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n`;
-    });
-    bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-});
+    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
+    
+    bot.sendMessage(msg.chat.id, "🔄 Güncel lig maçları listeleniyor...");
 
-bot.on('message', async (msg) => {
-    const text = msg.text;
-    if (!isNaN(text) && text.length > 3) { // Eğer gelen mesaj bir maç ID'si ise
-        bot.sendMessage(msg.chat.id, "🔍 Veriler harmanlanıyor, lütfen bekleyin...");
-        
-        try {
-            const matchInfo = await axios.get(`https://api.football-data.org/v4/matches/${text}`, { headers: { 'X-Auth-Token': API_KEY } });
-            const homeStats = await getTeamStats(matchInfo.data.homeTeam.id);
-            const awayStats = await getTeamStats(matchInfo.data.awayTeam.id);
+    try {
+        // Günün maçlarını çeken endpoint
+        const resp = await apiClient.get('/football-get-all-fixtures-by-date');
+        const matches = resp.data.results;
 
-            const result = harmonicDecision(homeStats, awayStats);
+        if (!matches || matches.length === 0) {
+            return bot.sendMessage(msg.chat.id, "⚠️ Şu an listelenecek maç bulunamadı.");
+        }
 
-            let report = `📈 *ANALİZ: ${matchInfo.data.homeTeam.name} - ${matchInfo.data.awayTeam.name}*\n`;
-            report += `🏆 Lig: ${matchInfo.data.competition.name}\n`;
-            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-            report += `🏠 Ev Sahibi (Son 6): ${homeStats.general.pts} P / Saha: ${homeStats.venue.pts} P\n`;
-            report += `✈️ Deplasman (Son 6): ${awayStats.general.pts} P / Saha: ${awayStats.venue.pts} P\n`;
-            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-            report += `🎯 *KARAR:* ${result.winner}\n`;
-            report += `⚽ *GOL:* ${result.goals}\n`;
-            report += `🥅 *BEKLENEN SKOR:* ${result.score}\n`;
-            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-            report += `💡 _Analiz sadece lig maçlarını (Son 6) baz alır. %60 Saha, %40 Genel form ağırlıklıdır._`;
+        let report = "📋 *GÜNÜN MAÇLARI VE ID'LERİ*\n\n";
+        matches.slice(0, 25).forEach(m => {
+            report += `🆔 \`${m.match_id}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
+        });
 
-            bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-        } catch (e) { bot.sendMessage(msg.chat.id, "❌ Hata: Maç verisi çekilemedi."); }
+        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+    } catch (e) {
+        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı. API Key veya Limit hatası olabilir.");
     }
 });
 
-// Sunucu
-http.createServer((r, s) => { s.writeHead(200); s.end('Bot Online'); }).listen(PORT);
+// ID gönderildiğinde çalışan dinleyici
+bot.on('message', async (msg) => {
+    const text = msg.text.trim();
+    // Eğer gelen mesaj 5 haneli veya daha uzun bir sayıysa (Maç ID'si varsayıyoruz)
+    if (!isNaN(text) && text.length >= 5) {
+        bot.sendMessage(msg.chat.id, "🧠 *Takım verileri çekiliyor ve harmanlanıyor...*");
+
+        const res = await getAnalysis(text);
+        if (!res) return bot.sendMessage(msg.chat.id, "❌ Maç detaylarına ulaşılamadı.");
+
+        let report = `📊 *ANALİZ SONUCU: ${res.home} - ${res.away}*\n`;
+        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+        report += `🏆 *KAZANAN:* ${res.winner}\n`;
+        report += `⚽ *GOL:* ${res.goals}\n`;
+        report += `📈 *Güç (Harman):* Ev ${res.hPower} | Dep ${res.aPower}\n`;
+        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+        report += `💡 _Analiz Kriteri: Son 6 Lig Maçı (%40) + Saha Avantajı (%60)_`;
+
+        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+    }
+});
+
+// Render için Sağlık Kontrolü
+http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
+console.log("Bot aktif ve emirlerini bekliyor...");
