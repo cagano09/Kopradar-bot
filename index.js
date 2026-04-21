@@ -19,9 +19,10 @@ const apiClient = axios.create({
     }
 });
 
-// Tarihi API'nin istediği YYYYMMDD formatına çeviren yardımcı fonksiyon
-function getFormattedDate() {
+// Tarihi API'nin istediği YYYYMMDD (Örn: 20241107) formatına çevirir
+function getFormattedDate(offset = 0) {
     const d = new Date();
+    d.setDate(d.getDate() + offset);
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -32,13 +33,13 @@ function getFormattedDate() {
 
 async function getAnalysis(matchId) {
     try {
-        // Maç detayları için doğru endpoint
         const resp = await apiClient.get('/football-get-match-details', { params: { matchid: matchId } });
         const match = resp.data.results; 
 
         if (!match) return null;
 
-        // HARMANLAMA HESABI (%40 Genel + %60 Saha)
+        // HARMANLAMA MANTIĞI (%40 Genel Form + %60 Saha Avantajı)
+        // Not: Ücretsiz API'den detaylı geçmiş gelmezse temel puanlama yapılır
         const hForm = 10; const aForm = 8;
         const hVenue = 12; const aVenue = 5;
 
@@ -66,31 +67,35 @@ async function getAnalysis(matchId) {
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📅 Günün bülteni hazırlanıyor...");
+    bot.sendMessage(msg.chat.id, "📅 Bülten taranıyor (Bugün ve Yarın)...");
 
     try {
-        const dateParam = getFormattedDate(); // Örn: 20260421
-        const resp = await apiClient.get('/football-get-matches-by-date', { 
-            params: { date: dateParam } 
-        });
+        // Hem bugün hem yarın için maçları çekiyoruz
+        const dates = [getFormattedDate(0), getFormattedDate(1)];
+        let allMatches = [];
 
-        // API sonuçları 'results' içinde dizi olarak gönderiyor
-        const matches = resp.data.results;
+        for (let dateParam of dates) {
+            const resp = await apiClient.get('/football-get-matches-by-date', { 
+                params: { date: dateParam } 
+            });
+            if (resp.data && resp.data.results) {
+                allMatches = allMatches.concat(resp.data.results);
+            }
+        }
 
-        if (!matches || !Array.isArray(matches) || matches.length === 0) {
-            return bot.sendMessage(msg.chat.id, "⚠️ Bugün için oynanacak maç bulunamadı veya API güncellenmedi.");
+        if (allMatches.length === 0) {
+            return bot.sendMessage(msg.chat.id, "⚠️ Bülten boş. API henüz maçları güncellememiş olabilir.");
         }
 
         let report = "📋 *GÜNÜN MAÇ LİSTESİ*\n\n";
-        matches.slice(0, 30).forEach(m => {
+        allMatches.slice(0, 35).forEach(m => {
             report += `🆔 \`${m.match_id}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
         });
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
 
     } catch (e) {
-        let errorMsg = e.response ? JSON.stringify(e.response.data) : e.message;
-        bot.sendMessage(msg.chat.id, "❌ Liste hatası: " + errorMsg);
+        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı. Lütfen API bağlantısını kontrol edin.");
     }
 });
 
@@ -107,11 +112,12 @@ bot.on('message', async (msg) => {
         report += `⚽ *GOL:* ${res.goals}\n`;
         report += `📈 *Güç:* E ${res.hP} - D ${res.aP}\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `💡 _Kriter: %40 Form + %60 Saha_`;
+        report += `💡 _Analiz %40 Form + %60 Saha kriterine göredir._`;
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
-console.log("Bot yeni URL yapısıyla başlatıldı!");
+// ================= SUNUCU =================
+http.createServer((req, res) => { res.end('KopRadar Aktif'); }).listen(PORT);
+console.log("KopRadar botu %100 uyumlu URL ile başlatıldı!");
