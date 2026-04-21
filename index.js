@@ -19,7 +19,6 @@ const apiClient = axios.create({
     }
 });
 
-// Tarih Formatlayıcı (YYYYMMDD)
 function getFormattedDate(offset = 0) {
     const d = new Date();
     d.setDate(d.getDate() + offset);
@@ -34,15 +33,23 @@ function getFormattedDate(offset = 0) {
 async function getAnalysis(matchId) {
     try {
         const resp = await apiClient.get('/football-get-match-details', { params: { matchid: matchId } });
-        const matchData = resp.data.response || resp.data.results;
+        
+        // API'nin muhtemel tüm veri yollarını deniyoruz
+        const matchData = resp.data.response || resp.data.results || resp.data.data;
         
         if (!matchData) return null;
 
-        // Takım isimlerini objeden ayıkla
-        const homeName = typeof matchData.home === 'object' ? matchData.home.name : (matchData.home || "Ev Sahibi");
-        const awayName = typeof matchData.away === 'object' ? matchData.away.name : (matchData.away || "Deplasman");
+        // İsimleri çekme mantığı (Hem liste hem detay uyumlu)
+        const getTeamName = (team) => {
+            if (!team) return "Bilinmiyor";
+            if (typeof team === 'object') return team.name || team.home_team_name || "Bilinmiyor";
+            return team;
+        };
 
-        // Statik Analiz (Formül: %40 Form + %60 Saha)
+        const homeName = getTeamName(matchData.home || matchData.home_team);
+        const awayName = getTeamName(matchData.away || matchData.away_team);
+
+        // ANALİZ HESABI (%40 Form + %60 Saha)
         const homePower = (10 * 0.4) + (12 * 0.6); 
         const awayPower = (8 * 0.4) + (5 * 0.6);
 
@@ -58,60 +65,62 @@ async function getAnalysis(matchId) {
             hP: homePower.toFixed(1),
             aP: awayPower.toFixed(1)
         };
-    } catch (e) { return null; }
+    } catch (e) {
+        console.log("Analiz hatası detayı:", e.message);
+        return null; 
+    }
 }
 
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📊 Takım isimleri çözümleniyor...");
+    bot.sendMessage(msg.chat.id, "📊 Liste güncelleniyor...");
 
     try {
         const dateParam = getFormattedDate(0);
         const resp = await apiClient.get('/football-get-matches-by-date', { params: { date: dateParam } });
         const matches = resp.data.response && resp.data.response.matches ? resp.data.response.matches : [];
 
-        if (matches.length === 0) {
-            return bot.sendMessage(msg.chat.id, "⚠️ Liste boş dönüyor.");
-        }
+        if (matches.length === 0) return bot.sendMessage(msg.chat.id, "⚠️ Maç bulunamadı.");
 
         let report = "📋 *GÜNCEL MAÇ LİSTESİ*\n\n";
-        matches.slice(0, 35).forEach(m => {
+        matches.slice(0, 30).forEach(m => {
             const mId = m.id || m.match_id;
-            
-            // "Object Object" hatasını burada çözüyoruz:
             const hName = (m.home && typeof m.home === 'object') ? m.home.name : (m.home || "Bilinmiyor");
             const aName = (m.away && typeof m.away === 'object') ? m.away.name : (m.away || "Bilinmiyor");
-            
             report += `🆔 \`${mId}\` | ${hName} - ${aName}\n`;
         });
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Liste Hatası: " + e.message);
+        bot.sendMessage(msg.chat.id, "❌ Liste Hatası.");
     }
 });
 
 bot.on('message', async (msg) => {
     const text = msg.text ? msg.text.trim() : "";
+    // Telegram komutlarını (/liste gibi) analiz etmemesi için kontrol
+    if (text.startsWith('/')) return;
+
     if (!isNaN(text) && text.length >= 5) {
-        bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
+        bot.sendMessage(msg.chat.id, "🧠 Maç verileri harmanlanıyor...");
         const res = await getAnalysis(text);
-        if (!res) return bot.sendMessage(msg.chat.id, "❌ Analiz hatası.");
+        
+        if (!res) {
+            return bot.sendMessage(msg.chat.id, "❌ Maç detayları bu ID için çekilemedi. API bu ligi desteklemiyor olabilir.");
+        }
 
         let report = `📊 *ANALİZ: ${res.home} - ${res.away}*\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
         report += `🏆 *KARAR:* ${res.winner}\n`;
         report += `⚽ *GOL:* ${res.goals}\n`;
-        report += `📈 *Güç:* E ${res.hP} - D ${res.aP}\n`;
+        report += `📈 *Güç Endeksi:* E ${res.hP} - D ${res.aP}\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `💡 _Analiz %40 Form + %60 Saha kriterine göredir._`;
+        report += `💡 _Kriter: %40 Form + %60 Saha_`;
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
-console.log("KopRadar Botu İsim Düzeltmesiyle Hazır!");
+http.createServer((req, res) => { res.end('KopRadar Aktif'); }).listen(PORT);
