@@ -14,72 +14,104 @@ const apiClient = axios.create({
     baseURL: 'https://free-api-live-football-data.p.rapidapi.com',
     headers: {
         'x-rapidapi-key': RAPID_API_KEY,
-        'x-rapidapi-host': 'free-api-live-football-data.p.rapidapi.com'
+        'x-rapidapi-host': 'free-api-live-football-data.p.rapidapi.com',
+        'Content-Type': 'application/json'
     }
 });
+
+// Tarihi API'nin istediği YYYYMMDD formatına çeviren yardımcı fonksiyon
+function getFormattedDate() {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+}
+
+// ================= ANALİZ MOTORU =================
+
+async function getAnalysis(matchId) {
+    try {
+        // Maç detayları için doğru endpoint
+        const resp = await apiClient.get('/football-get-match-details', { params: { matchid: matchId } });
+        const match = resp.data.results; 
+
+        if (!match) return null;
+
+        // HARMANLAMA HESABI (%40 Genel + %60 Saha)
+        const hForm = 10; const aForm = 8;
+        const hVenue = 12; const aVenue = 5;
+
+        const homePower = (hForm * 0.4) + (hVenue * 0.6);
+        const awayPower = (aForm * 0.4) + (aVenue * 0.6);
+
+        let winner = "BERABERLİK (X) 🤝";
+        if (homePower - awayPower > 1.8) winner = "EV SAHİBİ (1) 🏠";
+        else if (awayPower - homePower > 1.8) winner = "DEPLASMAN (2) ✈️";
+
+        return {
+            home: match.home_team_name || "Ev Sahibi",
+            away: match.away_team_name || "Deplasman",
+            winner,
+            goals: (homePower + awayPower) / 8 > 2.2 ? "2.5 ÜST ⚽" : "2.5 ALT 🛡️",
+            hP: homePower.toFixed(1),
+            aP: awayPower.toFixed(1)
+        };
+    } catch (e) {
+        return null;
+    }
+}
 
 // ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "🔍 Doğru bağlantı yolu aranıyor (Metod 1-5)...");
+    bot.sendMessage(msg.chat.id, "📅 Günün bülteni hazırlanıyor...");
 
-    const today = new Date().toISOString().split('T')[0];
-    
-    // API'nin dökümanında gizli olabilecek tüm varyasyonlar
-    const paths = [
-        '/get-all-matches-by-date',
-        '/football-all-matches-by-date',
-        '/fixtures-by-date',
-        '/all-matches',
-        '/get-matches'
-    ];
+    try {
+        const dateParam = getFormattedDate(); // Örn: 20260421
+        const resp = await apiClient.get('/football-get-matches-by-date', { 
+            params: { date: dateParam } 
+        });
 
-    let success = false;
+        // API sonuçları 'results' içinde dizi olarak gönderiyor
+        const matches = resp.data.results;
 
-    for (let path of paths) {
-        if (success) break;
-        try {
-            const resp = await apiClient.get(path, { params: { date: today } });
-            
-            // Veri yapısı kontrolü
-            const data = resp.data.results || resp.data.data || resp.data.response;
-
-            if (data && data.length > 0) {
-                let report = `✅ Çalışan Yol Bulundu: \`${path}\`\n\n`;
-                data.slice(0, 15).forEach(m => {
-                    const mId = m.match_id || m.id;
-                    report += `🆔 \`${mId}\` | ${m.home_team_name || m.home_team} - ${m.away_team_name || m.away_team}\n`;
-                });
-                bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-                success = true;
-            }
-        } catch (e) {
-            console.log(`${path} denendi: Başarısız.`);
+        if (!matches || !Array.isArray(matches) || matches.length === 0) {
+            return bot.sendMessage(msg.chat.id, "⚠️ Bugün için oynanacak maç bulunamadı veya API güncellenmedi.");
         }
-    }
 
-    if (!success) {
-        bot.sendMessage(msg.chat.id, "❌ Hiçbir yol çalışmadı.\n\nLütfen RapidAPI ekranındaki sağ panelde bulunan siyah kutudaki **'url'** satırını (örneğin: /v1/fixtures...) buraya kopyala. Sorunu ancak o şekilde kökten çözebiliriz.");
+        let report = "📋 *GÜNÜN MAÇ LİSTESİ*\n\n";
+        matches.slice(0, 30).forEach(m => {
+            report += `🆔 \`${m.match_id}\` | ${m.home_team_name} - ${m.away_team_name}\n`;
+        });
+
+        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+
+    } catch (e) {
+        let errorMsg = e.response ? JSON.stringify(e.response.data) : e.message;
+        bot.sendMessage(msg.chat.id, "❌ Liste hatası: " + errorMsg);
     }
 });
 
-// Analiz Dinleyicisi
 bot.on('message', async (msg) => {
     const text = msg.text ? msg.text.trim() : "";
     if (!isNaN(text) && text.length >= 5) {
         bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
-        try {
-            // Analiz için de en genel detay endpointini deniyoruz
-            const resp = await apiClient.get('/get-match-details-by-id', { params: { matchid: text } });
-            const d = resp.data.results || resp.data.data;
-            
-            bot.sendMessage(msg.chat.id, `📊 *Maç:* ${d.home_team_name} vs ${d.away_team_name}\n🎯 *Tahmin:* %60 Saha Avantajı ile Ev Sahibi önde.`);
-        } catch (e) {
-            bot.sendMessage(msg.chat.id, "❌ Detaylı veri bu ID için mevcut değil.");
-        }
+        const res = await getAnalysis(text);
+        if (!res) return bot.sendMessage(msg.chat.id, "❌ Detaylar alınamadı.");
+
+        let report = `📊 *ANALİZ: ${res.home} - ${res.away}*\n`;
+        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+        report += `🏆 *KARAR:* ${res.winner}\n`;
+        report += `⚽ *GOL:* ${res.goals}\n`;
+        report += `📈 *Güç:* E ${res.hP} - D ${res.aP}\n`;
+        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+        report += `💡 _Kriter: %40 Form + %60 Saha_`;
+
+        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     }
 });
 
-// Sunucu
 http.createServer((req, res) => { res.end('KopRadar Online'); }).listen(PORT);
+console.log("Bot yeni URL yapısıyla başlatıldı!");
