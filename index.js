@@ -24,21 +24,19 @@ const apiClient = axios.create({
 
 // ================= ANALİZ MOTORU (%40 / %60) =================
 
-// Son 6 maçın puan ortalamasını 10 üzerinden hesaplar
 function getFormPoints(matches, teamId, focus = 'all') {
-    if (!matches || matches.length === 0) return 5; // Veri yoksa nötr
-
+    if (!matches || matches.length === 0) return 5;
     let totalPoints = 0;
     let matchCount = 0;
 
-    // Sadece son 6 maça bak (veya fokus saha ise o sahadaki son 6)
     for (const m of matches) {
         if (matchCount >= 6) break;
+        // Sadece bitmiş (FINISHED) maçları form analizine dahil et
+        if (m.status !== 'FINISHED') continue;
 
         const isHome = m.homeTeam.id === teamId;
         const isAway = m.awayTeam.id === teamId;
 
-        // Saha odaklı analiz (Sadece iç saha veya sadece dış saha)
         if (focus === 'home' && !isHome) continue;
         if (focus === 'away' && !isAway) continue;
 
@@ -46,12 +44,10 @@ function getFormPoints(matches, teamId, focus = 'all') {
         if (m.winner === (isHome ? 'HOME_TEAM' : 'AWAY_TEAM')) totalPoints += 3;
         else if (m.winner === 'DRAW') totalPoints += 1;
     }
-
     return matchCount > 0 ? (totalPoints / (matchCount * 3)) * 10 : 5;
 }
 
 function harmanla(hName, aName, hStats, aStats) {
-    // FORMÜL: (Genel Form * 0.4) + (Saha Formu * 0.6)
     const homePower = (hStats.genel * 0.4) + (hStats.saha * 0.6);
     const awayPower = (aStats.genel * 0.4) + (aStats.saha * 0.6);
 
@@ -74,60 +70,54 @@ function harmanla(hName, aName, hStats, aStats) {
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
 
-    const today = new Date().toISOString().split('T')[0];
-    
-    // Önbellek: Eğer bugün liste çekildiyse API'ye gitme
-    if (cache.date === today && cache.matches.length > 0) {
-        return basListeyi(msg.chat.id, cache.matches, "Bellek ✅");
-    }
-
-    bot.sendMessage(msg.chat.id, "🔄 Football-Data bülteni taranıyor...");
+    bot.sendMessage(msg.chat.id, "🔄 Oynanmamış maçlar taranıyor ve liste güncelleniyor...");
 
     try {
-        const resp = await apiClient.get('/matches');
+        // status=SCHEDULED filtresi sadece başlamamış maçları getirir
+        const resp = await apiClient.get('/matches', { params: { status: 'SCHEDULED' } });
         const matches = resp.data.matches || [];
 
-        if (matches.length === 0) return bot.sendMessage(msg.chat.id, "⚠️ Bugün desteklenen liglerde maç bulunamadı.");
+        if (matches.length === 0) {
+            return bot.sendMessage(msg.chat.id, "⚠️ Şu an için bültende oynanmamış maç bulunamadı.");
+        }
 
-        cache.date = today;
+        // Önbelleği her liste komutunda tazeliyoruz (Güncelleme özelliği)
+        cache.date = new Date().toISOString().split('T')[0];
         cache.matches = matches;
-        basListeyi(msg.chat.id, matches, "Güncel 🔄");
+        cache.analyzed = {}; // Yeni liste gelince eski analizleri temizle
+
+        let report = `📋 *GÜNCEL BÜLTEN (Sadece Başlamamışlar)*\n\n`;
+        matches.slice(0, 35).forEach(m => {
+            // Saat formatlama (UTC'den yerel saate basit çevrim gerekebilir ama API genelde UTC verir)
+            const matchTime = new Date(m.utcDate).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+            report += `⏰ ${matchTime} | 🆔 \`${m.id}\`\n👉 ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n\n`;
+        });
+
+        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ API Hatası: Veri çekilemedi. (Dakikalık limit dolmuş olabilir)");
+        bot.sendMessage(msg.chat.id, "❌ Liste güncellenemedi. Lütfen biraz sonra tekrar deneyin.");
     }
 });
-
-function basListeyi(chatId, matches, info) {
-    let report = `📋 *KOPRADAR BÜLTEN (${info})*\n\n`;
-    matches.slice(0, 35).forEach(m => {
-        report += `🆔 \`${m.id}\` | ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n`;
-    });
-    bot.sendMessage(chatId, report, { parse_mode: "Markdown" });
-}
 
 bot.on('message', async (msg) => {
     const text = msg.text?.trim();
     if (!text || text.startsWith('/') || isNaN(text)) return;
 
-    // Daha önce analiz edildiyse hafızadan ver (Sorgu tasarrufu!)
     if (cache.analyzed[text]) {
         return bot.sendMessage(msg.chat.id, cache.analyzed[text], { parse_mode: "Markdown" });
     }
 
-    bot.sendMessage(msg.chat.id, "🧠 Gerçek zamanlı form verileri harmanlanıyor...");
+    const matchInfo = cache.matches.find(m => String(m.id) === text);
+    if (!matchInfo) return bot.sendMessage(msg.chat.id, "❌ Bu ID listede bulunamadı veya maç başlamış olabilir. Lütfen /liste yaparak güncelleyin.");
+
+    bot.sendMessage(msg.chat.id, "🧠 Analiz ediliyor...");
 
     try {
-        // H2H ve son maç verilerini çek
         const h2hResp = await apiClient.get(`/matches/${text}/head2head`, { params: { limit: 20 } });
-        const matchInfo = cache.matches.find(m => String(m.id) === text);
-        
-        if (!h2hResp.data || !matchInfo) throw new Error("Veri eksik");
-
         const hId = matchInfo.homeTeam.id;
         const aId = matchInfo.awayTeam.id;
         const history = h2hResp.data.matches;
 
-        // Senin Kriterlerin: Son 6 maç bazlı puanlama
         const homeStats = {
             genel: getFormPoints(history, hId, 'all'),
             saha: getFormPoints(history, hId, 'home')
@@ -141,18 +131,18 @@ bot.on('message', async (msg) => {
 
         let report = `📊 *ANALİZ: ${matchInfo.homeTeam.name} - ${matchInfo.awayTeam.name}*\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `🏆 *KARAR:* ${res.karar}\n`;
+        report += `🏆 *TAHMİN:* ${res.karar}\n`;
         report += `📈 *Güç:* E ${res.hP} - D ${res.aP}\n`;
         report += `⚽ *GOL:* ${res.gol}\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `📐 *Kriter:* Genel(%40) + Saha(%60)`;
+        report += `📐 *Harman:* %40 Genel + %60 Saha`;
 
         cache.analyzed[text] = report;
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
 
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Analiz hatası: Bu maçın detaylı geçmişi API'de bulunamadı.");
+        bot.sendMessage(msg.chat.id, "❌ Detaylı veri çekilemedi.");
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar v4 Online'); }).listen(PORT);
+http.createServer((req, res) => { res.end('KopRadar v4.1'); }).listen(PORT);
