@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 const http = require('http');
 
 // ================= AYARLAR =================
@@ -9,170 +10,107 @@ const PORT = process.env.PORT || 8080;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// ================= CACHE (ÖNBELLEK) SİSTEMİ =================
-let matchCache = {
-    data: null,
-    lastFetchTime: 0
-};
-const CACHE_DURATION = 20 * 60 * 1000; // 20 Dakika (Banlanmayı önlemek için ideal süre)
+// Sadece ana liglerin kodları (Kupa ve Avrupa'yı dışlamak için)
+const VALID_LEAGUES = ['PL', 'PD', 'BL1', 'SA', 'FL1', 'DED', 'PPL', 'ELC', 'BSA', 'TR'];
 
-// ================= MONTE CARLO & POISSON ALGORİTMASI =================
-function runMonteCarlo(match) {
-    // Takım ID'lerinden sentetik güç ve form verisi türetme (API kısıtlaması nedeniyle)
-    // Gerçek bir modelde buralara lig tablosu verileri çekilip eklenmelidir.
-    const homeId = match.homeTeam.id;
-    const awayId = match.awayTeam.id;
+// ================= ANALİZ MOTORU (SON 6 MAÇ & HARMANLAMA) =================
 
-    // Temel Gol Beklentisi (Lambda) - Form ve güç simülasyonu
-    let lambdaHome = 1.2 + ((homeId % 10) / 10);
-    let lambdaAway = 1.0 + ((awayId % 10) / 10);
-
-    // Ev sahibi/Motivasyon avantajı katsayısı
-    lambdaHome *= 1.10;
-
-    let results = { homeWin: 0, draw: 0, awayWin: 0, over25: 0, totalGoals: 0, scores: {} };
-    const iterations = 10000;
-
-    for (let i = 0; i < iterations; i++) {
-        // Poisson Dağılımına Göre Gol Üretimi
-        let hGoals = 0, aGoals = 0;
-        let LHome = Math.exp(-lambdaHome), LAway = Math.exp(-lambdaAway);
-        let pHome = 1.0, pAway = 1.0;
-
-        do { hGoals++; pHome *= Math.random(); } while (pHome > LHome);
-        do { aGoals++; pAway *= Math.random(); } while (pAway > LAway);
-        hGoals--; aGoals--;
-
-        // İstatistikleri Kaydet
-        if (hGoals > aGoals) results.homeWin++;
-        else if (hGoals === aGoals) results.draw++;
-        else results.awayWin++;
-
-        if (hGoals + aGoals > 2.5) results.over25++;
-        results.totalGoals += (hGoals + aGoals);
-
-        let scoreKey = `${hGoals}-${aGoals}`;
-        results.scores[scoreKey] = (results.scores[scoreKey] || 0) + 1;
-    }
-
-    // En Olası Skor
-    let topScore = Object.keys(results.scores).reduce((a, b) => results.scores[a] > results.scores[b] ? a : b);
-
-    return {
-        homeProb: (results.homeWin / 100).toFixed(1),
-        drawProb: (results.draw / 100).toFixed(1),
-        awayProb: (results.awayWin / 100).toFixed(1),
-        overProb: (results.over25 / 100).toFixed(1),
-        avgGoals: (results.totalGoals / iterations).toFixed(2),
-        topScore
-    };
-}
-
-// ================= API VERİ ÇEKME =================
-async function fetchMatches() {
-    const now = Date.now();
-    if (matchCache.data && (now - matchCache.lastFetchTime < CACHE_DURATION)) {
-        return matchCache.data;
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const tomorrowObj = new Date();
-    tomorrowObj.setDate(tomorrowObj.getDate() + 1);
-    const tomorrow = tomorrowObj.toISOString().split('T')[0];
-    
-    // Ücretsiz plan kısıtlaması nedeniyle tarih aralığını dar tutuyoruz
-    const url = `https://api.football-data.org/v4/matches?dateFrom=${today}&dateTo=${tomorrow}`;
-
+async function getTeamStats(teamId) {
     try {
-        const response = await fetch(url, {
-            headers: { 'X-Auth-Token': API_KEY }
-        });
-
-        if (response.status === 429) {
-            console.error("API Limit Aşıldı!");
-            return "LIMIT_EXCEEDED";
-        }
-
-        const data = await response.json();
-        const matches = data.matches ? data.matches.filter(m => m.status === 'TIMED' || m.status === 'SCHEDULED') : [];
+        const url = `https://api.football-data.org/v4/teams/${teamId}/matches?limit=40`;
+        const resp = await axios.get(url, { headers: { 'X-Auth-Token': API_KEY } });
         
-        matchCache.data = matches;
-        matchCache.lastFetchTime = now;
-        return matches;
-    } catch (e) {
-        console.error("Fetch Hatası:", e);
-        return null;
-    }
+        // Sadece lig maçlarını filtrele
+        const leagueMatches = resp.data.matches.filter(m => VALID_LEAGUES.includes(m.competition.code) && m.status === 'FINISHED');
+
+        // A. Genel Form (Son 6 Lig Maçı - İç/Dış Karışık)
+        const last6General = leagueMatches.slice(0, 6);
+        
+        // B. Saha Formu (Ev sahibi ise evindeki, deplasman ise deplasmandaki son 6 lig maçı)
+        const last6Venue = leagueMatches.filter(m => 
+            (m.homeTeam.id === teamId && m.homeTeam.id === teamId) || 
+            (m.awayTeam.id === teamId && m.awayTeam.id === teamId)
+        ).slice(0, 6);
+
+        return {
+            general: calculatePointsAndGoals(last6General, teamId),
+            venue: calculatePointsAndGoals(last6Venue, teamId)
+        };
+    } catch (e) { return null; }
 }
 
-// ================= TELEGRAM KOMUTLARI =================
+function calculatePointsAndGoals(matches, teamId) {
+    let pts = 0, scored = 0, conceded = 0;
+    matches.forEach(m => {
+        const isHome = m.homeTeam.id === teamId;
+        const g = isHome ? m.score.fullTime.home : m.score.fullTime.away;
+        const a = isHome ? m.score.fullTime.away : m.score.fullTime.home;
+        scored += g; conceded += a;
+        if (g > a) pts += 3; else if (g === a) pts += 1;
+    });
+    return { pts, avgScored: (scored / (matches.length || 1)), avgConceded: (conceded / (matches.length || 1)) };
+}
 
-bot.onText(/\/start/, (msg) => {
-    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    const help = "🤖 *KopRadar Monte Carlo Analiz Botu*\n\n" +
-                 "📋 `/liste` - Günün maçlarını ve ID'lerini getirir.\n" +
-                 "🎯 `/simule [ID]` - Seçilen maçı 10.000 kez simüle eder.\n" +
-                 "💰 `/kupon` - En yüksek güvenli maçlardan kupon yapar.";
-    bot.sendMessage(msg.chat.id, help, { parse_mode: "Markdown" });
-});
+function harmonicDecision(home, away) {
+    // FORMÜL: (Genel Form %40) + (Saha Formu %60)
+    const homePower = (home.general.pts * 0.4) + (home.venue.pts * 0.6);
+    const awayPower = (away.general.pts * 0.4) + (away.venue.pts * 0.6);
+
+    // GOL ANALİZİ: (Atma potansiyeli + Yeme potansiyeli) / 2
+    const expHome = (home.venue.avgScored + away.venue.avgConceded) / 2;
+    const expAway = (away.venue.avgScored + home.venue.avgConceded) / 2;
+    const totalExp = expHome + expAway;
+
+    let winner = "BERABERLİK (X) 🤝";
+    if (homePower - awayPower > 1.8) winner = "EV SAHİBİ (1) 🏠";
+    else if (awayPower - homePower > 1.8) winner = "DEPLASMAN (2) ✈️";
+
+    let goals = "2.5 ALT 🛡️";
+    if (totalExp > 2.3) goals = "2.5 ÜST ⚽";
+    else if (totalExp > 1.7) goals = "1.5 ÜST ⚠️";
+
+    return { winner, goals, score: `${expHome.toFixed(1)} - ${expAway.toFixed(1)}` };
+}
+
+// ================= KOMUTLAR =================
 
 bot.onText(/\/liste/, async (msg) => {
-    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    
-    bot.sendMessage(msg.chat.id, "🔄 Maç listesi güncelleniyor, lütfen bekleyin...");
-    const matches = await fetchMatches();
-
-    if (matches === "LIMIT_EXCEEDED") {
-        return bot.sendMessage(msg.chat.id, "⚠️ API limiti doldu. Lütfen 15 dakika bekleyin.");
-    }
-
-    if (!matches || matches.length === 0) {
-        return bot.sendMessage(msg.chat.id, "⚠️ Bugün desteklenen liglerde oynanacak maç bulunamadı.");
-    }
-
-    let response = "📅 *Bugün & Yarın Oynanacak Maçlar:*\n\n";
-    matches.slice(0, 30).forEach(m => {
-        response += `🆔 \`${m.id}\` | ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n`;
+    const matches = await axios.get(`https://api.football-data.org/v4/matches`, { headers: { 'X-Auth-Token': API_KEY } });
+    let report = "📋 *GÜNÜN LİG MAÇLARI*\n\n";
+    matches.data.matches.filter(m => VALID_LEAGUES.includes(m.competition.code)).slice(0, 25).forEach(m => {
+        report += `🆔 \`${m.id}\` | ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n`;
     });
-
-    bot.sendMessage(msg.chat.id, response, { parse_mode: "Markdown" });
-});
-
-bot.onText(/\/simule (.+)/, async (msg, match) => {
-    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    const matchId = match[1].trim();
-
-    const matches = await fetchMatches();
-    const target = (matches && matches !== "LIMIT_EXCEEDED") ? matches.find(m => m.id.toString() === matchId) : null;
-
-    if (!target) {
-        return bot.sendMessage(msg.chat.id, "❌ Maç bulunamadı. Lütfen `/liste` ile ID'yi kontrol edin.");
-    }
-
-    bot.sendMessage(msg.chat.id, `⚙️ *${target.homeTeam.name}* maçı için 10.000 olasılık hesaplanıyor...`, { parse_mode: "Markdown" });
-
-    const sim = runMonteCarlo(target);
-
-    let report = `📊 *MONTE CARLO ANALİZ RAPORU*\n`;
-    report += `🏟 *${target.homeTeam.name} - ${target.awayTeam.name}*\n`;
-    report += `🏆 ${target.competition.name}\n`;
-    report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-    report += `🏠 Ev Kazanır: %${sim.homeProb}\n`;
-    report += `🤝 Beraberlik: %${sim.drawProb}\n`;
-    report += `🚀 Deplasman Kazanır: %${sim.awayProb}\n\n`;
-    report += `⚽ 2.5 Üst Olasılığı: %${sim.overProb}\n`;
-    report += `🥅 Beklenen Gol: ${sim.avgGoals}\n`;
-    report += `🎯 *En Olası Skor:* ${sim.topScore}\n`;
-    report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-    report += `💡 _Sistem her maçı 10.000 kez simüle ederek en istikrarlı sonucu bulur._`;
-
     bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
 });
 
-// ================= SUNUCU =================
-http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('KopRadar Bot is Online');
-}).listen(PORT);
+bot.on('message', async (msg) => {
+    const text = msg.text;
+    if (!isNaN(text) && text.length > 3) { // Eğer gelen mesaj bir maç ID'si ise
+        bot.sendMessage(msg.chat.id, "🔍 Veriler harmanlanıyor, lütfen bekleyin...");
+        
+        try {
+            const matchInfo = await axios.get(`https://api.football-data.org/v4/matches/${text}`, { headers: { 'X-Auth-Token': API_KEY } });
+            const homeStats = await getTeamStats(matchInfo.data.homeTeam.id);
+            const awayStats = await getTeamStats(matchInfo.data.awayTeam.id);
 
-console.log("Bot başlatıldı...");
+            const result = harmonicDecision(homeStats, awayStats);
+
+            let report = `📈 *ANALİZ: ${matchInfo.data.homeTeam.name} - ${matchInfo.data.awayTeam.name}*\n`;
+            report += `🏆 Lig: ${matchInfo.data.competition.name}\n`;
+            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+            report += `🏠 Ev Sahibi (Son 6): ${homeStats.general.pts} P / Saha: ${homeStats.venue.pts} P\n`;
+            report += `✈️ Deplasman (Son 6): ${awayStats.general.pts} P / Saha: ${awayStats.venue.pts} P\n`;
+            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+            report += `🎯 *KARAR:* ${result.winner}\n`;
+            report += `⚽ *GOL:* ${result.goals}\n`;
+            report += `🥅 *BEKLENEN SKOR:* ${result.score}\n`;
+            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+            report += `💡 _Analiz sadece lig maçlarını (Son 6) baz alır. %60 Saha, %40 Genel form ağırlıklıdır._`;
+
+            bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+        } catch (e) { bot.sendMessage(msg.chat.id, "❌ Hata: Maç verisi çekilemedi."); }
+    }
+});
+
+// Sunucu
+http.createServer((r, s) => { s.writeHead(200); s.end('Bot Online'); }).listen(PORT);
