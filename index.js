@@ -12,7 +12,8 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 
 let cache = {
     matches: [],
-    analyzed: {}
+    analyzed: {},
+    leagueTables: {} // Puan durumlarını burada saklayacağız
 };
 
 const apiClient = axios.create({
@@ -20,10 +21,10 @@ const apiClient = axios.create({
     headers: { 'X-Auth-Token': FOOTBALL_DATA_API_KEY }
 });
 
-// ================= ANALİZ MOTORU (GELİŞTİRİLMİŞ) =================
+// ================= ANALİZ MOTORU =================
 
 function getFormPoints(history, targetId, focus = 'all') {
-    if (!history || history.length === 0) return 0;
+    if (!history || history.length === 0) return null; // Veri yoksa null dön
     
     let totalPoints = 0;
     let matchCount = 0;
@@ -32,45 +33,35 @@ function getFormPoints(history, targetId, focus = 'all') {
         if (matchCount >= 6) break;
         if (m.status !== 'FINISHED') continue;
 
-        // Takım ID eşleştirmesi (Home veya Away fark etmeksizin)
         const isHome = m.homeTeam.id === targetId;
         const isAway = m.awayTeam.id === targetId;
+        if (!isHome && !isAway) continue;
 
-        if (!isHome && !isAway) continue; // Aranan takım bu maçta yoksa geç
-
-        // Saha odaklı analiz filtresi
         if (focus === 'home' && !isHome) continue;
         if (focus === 'away' && !isAway) continue;
 
         matchCount++;
-        
-        // Galibiyet/Beraberlik Kontrolü
-        if (m.score.winner === (isHome ? 'HOME_TEAM' : 'AWAY_TEAM')) {
-            totalPoints += 3;
-        } else if (m.score.winner === 'DRAW') {
-            totalPoints += 1;
-        }
+        if (m.score.winner === (isHome ? 'HOME_TEAM' : 'AWAY_TEAM')) totalPoints += 3;
+        else if (m.score.winner === 'DRAW') totalPoints += 1;
     }
 
-    // 10 üzerinden puanla (Maç başına max 3 puan üzerinden oranla)
     return matchCount > 0 ? (totalPoints / (matchCount * 3)) * 10 : 0;
 }
 
 function harmanla(hName, aName, hStats, aStats) {
-    // FORMÜL: (Genel Form * 0.4) + (Saha Formu * 0.6)
+    // Eğer bir tarafın verisi tamamen boşsa (null gelmişse)
+    if (hStats.genel === null || aStats.genel === null) {
+        return { hP: "Veri Yok", aP: "Veri Yok", karar: "⚠️ ANALİZ RİSKLİ (Veri Eksik)", gol: "Bilinmiyor" };
+    }
+
     const homePower = (hStats.genel * 0.4) + (hStats.saha * 0.6);
     const awayPower = (aStats.genel * 0.4) + (aStats.saha * 0.6);
 
     let karar = "BERABERLİK (X) 🤝";
     const fark = homePower - awayPower;
 
-    // Eğer her iki takımın da verisi yoksa (Yeni lig vb)
-    if (homePower === 0 && awayPower === 0) {
-        return { hP: "0.0", aP: "0.0", karar: "YETERSİZ VERİ ⚠️", gol: "BELİRSİZ" };
-    }
-
-    if (fark > 1.4) karar = `EV SAHİBİ (${hName}) 🏠`;
-    else if (fark < -1.4) karar = `DEPLASMAN (${aName}) ✈️`;
+    if (fark > 1.6) karar = `EV SAHİBİ (${hName}) 🏠`;
+    else if (fark < -1.6) karar = `DEPLASMAN (${aName}) ✈️`;
 
     return {
         hP: homePower.toFixed(1),
@@ -84,7 +75,7 @@ function harmanla(hName, aName, hStats, aStats) {
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📅 Güncel bülten hazırlanıyor...");
+    bot.sendMessage(msg.chat.id, "📅 Güncel bülten ve lig verileri taranıyor...");
 
     try {
         const resp = await apiClient.get('/matches', { params: { status: 'SCHEDULED' } });
@@ -103,7 +94,7 @@ bot.onText(/\/liste/, async (msg) => {
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Liste alınamadı.");
+        bot.sendMessage(msg.chat.id, "❌ Liste hatası: API limiti veya bağlantı sorunu.");
     }
 });
 
@@ -118,16 +109,17 @@ bot.on('message', async (msg) => {
     const matchInfo = cache.matches.find(m => String(m.id) === text);
     if (!matchInfo) return bot.sendMessage(msg.chat.id, "❌ ID bulunamadı. Lütfen /liste yapın.");
 
-    bot.sendMessage(msg.chat.id, "🧠 Derin istatistikler harmanlanıyor...");
+    bot.sendMessage(msg.chat.id, "🧠 Matematiksel model harmanlanıyor...");
 
     try {
-        // H2H endpoint'i hem karşılıklı maçları hem de takımların kendi son maçlarını verir
+        // H2H Verisi
         const h2hResp = await apiClient.get(`/matches/${text}/head2head`, { params: { limit: 50 } });
-        const history = h2hResp.data.matches;
+        const history = h2hResp.data.matches || [];
 
         const hId = matchInfo.homeTeam.id;
         const aId = matchInfo.awayTeam.id;
 
+        // Puan Hesaplama (Veri yoksa 0 değil null döner)
         const homeStats = {
             genel: getFormPoints(history, hId, 'all'),
             saha: getFormPoints(history, hId, 'home')
@@ -142,17 +134,18 @@ bot.on('message', async (msg) => {
         let report = `📊 *ANALİZ: ${matchInfo.homeTeam.name} - ${matchInfo.awayTeam.name}*\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
         report += `🏆 *KARAR:* ${res.karar}\n`;
-        report += `📈 *Güç:* E ${res.hP} - D ${res.aP}\n`;
-        report += `⚽ *GOL:* ${res.gol}\n`;
+        report += `📈 *Güç Endeksi:* E ${res.hP} - D ${res.aP}\n`;
+        report += `⚽ *GOL TAHMİNİ:* ${res.gol}\n`;
         report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `📐 *Harman:* %40 Genel + %60 Saha`;
+        report += `📐 *Kriter:* %40 Genel + %60 Saha\n`;
+        report += `⚠️ _Not: 0.0 puan verisi eksikliği simgeler._`;
 
         cache.analyzed[text] = report;
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
 
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Veri çekme hatası. Bu maçın geçmişi henüz sisteme girilmemiş olabilir.");
+        bot.sendMessage(msg.chat.id, "❌ Maç detayları şu an için çekilemedi.");
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar v4.2'); }).listen(PORT);
+http.createServer((req, res) => { res.end('KopRadar v4.5'); }).listen(PORT);
