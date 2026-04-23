@@ -13,18 +13,16 @@ let cache = { matches: [], standings: {} };
 
 const apiClient = axios.create({
     baseURL: 'https://api.football-data.org/v4',
-    headers: { 'X-Auth-Token': FOOTBALL_DATA_API_KEY }
+    headers: { 'X-Auth-Token': FOOTBALL_DATA_API_KEY },
+    timeout: 10000 // 10 saniye zaman aşımı
 });
 
-// Oran Hesaplama Motoru
+// Oran Hesaplama
 function calculateIdealOdds(hPower, aPower) {
     const total = hPower + aPower;
-    if (total === 0) return { hOdd: "0.00", aOdd: "0.00" };
-    
-    // %15 kar marjı/beraberlik payı bırakılmış olasılık
+    if (total <= 0) return { hOdd: "0.00", aOdd: "0.00" };
     const hWinProb = (hPower / total) * 0.82; 
     const aWinProb = (aPower / total) * 0.82;
-
     return {
         hOdd: (1 / hWinProb).toFixed(2),
         aOdd: (1 / aWinProb).toFixed(2)
@@ -33,54 +31,41 @@ function calculateIdealOdds(hPower, aPower) {
 
 bot.onText(/\/liste/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "📊 Bülten hazırlanıyor...");
+    bot.sendMessage(msg.chat.id, "📅 Güncel bülten çekiliyor...");
 
     try {
         const resp = await apiClient.get('/matches', { params: { status: 'SCHEDULED' } });
         cache.matches = resp.data.matches || [];
 
-        const leagues = [...new Set(cache.matches.map(m => m.competition.code))];
-        for (const code of leagues) {
-            try {
-                const stResp = await apiClient.get(`/competitions/${code}/standings`);
-                cache.standings[code] = stResp.data.standings[0].table;
-            } catch (err) { console.log(`${code} tablosu alınamadı.`); }
-        }
-
         let report = `📋 *LİSTE GÜNCELLENDİ*\n\n`;
-        cache.matches.slice(0, 30).forEach(m => {
+        cache.matches.slice(0, 35).forEach(m => {
             report += `🆔 \`${m.id}\` | ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n`;
         });
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ API Hatası. Lütfen 1 dakika bekleyip tekrar /liste yapın.");
+        bot.sendMessage(msg.chat.id, "❌ API Hatası: Liste alınamadı. (Saniyeler sonra tekrar dene)");
     }
 });
 
 bot.on('message', async (msg) => {
     const text = msg.text?.trim();
-    
-    // Komutları ve sayı olmayan mesajları ele
     if (!text || text.startsWith('/') || isNaN(text)) return;
 
-    // ÖNEMLİ: ID'yi hem string hem number olarak kontrol et
     const match = cache.matches.find(m => String(m.id) === text);
-    
-    if (!match) {
-        // Eğer maç bulunamadıysa kullanıcıya bilgi ver (Sessiz kalma sorunu çözümü)
-        return bot.sendMessage(msg.chat.id, "⚠️ Bu ID bültende bulunamadı. Lütfen önce /liste yaparak güncel ID'leri alın.");
-    }
+    if (!match) return bot.sendMessage(msg.chat.id, "⚠️ ID bültende yok. Önce /liste yapın.");
 
-    bot.sendMessage(msg.chat.id, `🧬 ${match.homeTeam.shortName} maçı için ideal oranlar hesaplanıyor...`);
+    bot.sendMessage(msg.chat.id, `⏳ ${match.homeTeam.shortName} için lig tablosu alınıyor ve analiz ediliyor...`);
 
     try {
-        const table = cache.standings[match.competition.code];
-        if (!table) throw new Error("Puan durumu bulunamadı.");
+        // LİG TABLOSUNU ANLIK ÇEK (Limitleri korur)
+        const leagueCode = match.competition.code;
+        const stResp = await apiClient.get(`/competitions/${leagueCode}/standings`);
+        const table = stResp.data.standings[0].table;
 
         const hTeam = table.find(t => t.team.id === match.homeTeam.id);
         const aTeam = table.find(t => t.team.id === match.awayTeam.id);
 
-        if (!hTeam || !aTeam) throw new Error("Takım verisi eksik.");
+        if (!hTeam || !aTeam) throw new Error("Takım verisi tabloda yok.");
 
         const parseForm = (f) => {
             if(!f) return 5;
@@ -106,17 +91,18 @@ bot.on('message', async (msg) => {
         const ideal = calculateIdealOdds(hFinal, aFinal);
 
         let report = `📊 *${match.homeTeam.name} - ${match.awayTeam.name}*\n`;
-        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `🎯 *İDEAL BAHİS ORANLARI:*\n`;
-        report += `🏠 **EV:** ${ideal.hOdd}\n`;
-        report += `✈️ **DEP:** ${ideal.aOdd}\n`;
-        report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        report += `🔍 *Analiz Notu:* Eğer bahis sitesi bu oranlardan daha YÜKSEK veriyorsa o seçenek değerlidir.`;
+        report += `🎯 *İDEAL ORANLAR:*\n`;
+        report += `🏠 **MS 1:** ${ideal.hOdd}\n`;
+        report += `✈️ **MS 2:** ${ideal.aOdd}\n\n`;
+        report += `📈 *Güç Farkı:* ${(hFinal - aFinal).toFixed(1)}\n`;
+        report += `📐 *Harman:* %40 Lig + %30 Form + %30 Saha`;
 
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
+
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Veri hatası: Bu maçın lig tablosuna şu an ulaşılamıyor.");
+        console.error(e);
+        bot.sendMessage(msg.chat.id, "❌ Analiz Hatası: API limiti doldu veya bu ligin puan tablosu şu an kapalı.");
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar v5.6 Ready'); }).listen(PORT);
+http.createServer((req, res) => { res.end('KopRadar v5.7 Stable'); }).listen(PORT);
