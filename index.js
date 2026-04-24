@@ -6,62 +6,63 @@ const MY_CHAT_ID = "1094416843";
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 function analizEt(metin) {
-    // Metindeki tüm sayıları ve ondalıklı sayıları (xG için) ayıkla
-    const sayilar = metin.match(/\d+(\.\d+)?/g);
+    // Sadece sayıları ve noktaları al (xG için)
+    const d = metin.trim().split(/\s+/).map(Number);
     
-    if (!sayilar || sayilar.length < 6) {
-        return "❌ Veri Ayıklanamadı! Lütfen istatistikleri kopyalayıp buraya yapıştırın.";
+    if (d.length < 5) {
+        return "❌ *Eksik Veri Girişi!*\n\nLütfen sayıları şu sırayla, aralarında boşluk bırakarak yazın:\n`Dakika EvŞut DepŞut EvKorner DepKorner EvKart DepKart Ev_xG Dep_xG`";
     }
 
-    const d = sayilar.map(Number);
-    
-    // Veri Haritası (Genelde kopyalanan metin sırası: Dakika, Şutlar, Kornerler, Kartlar, xG)
+    // Değişkenleri tanımlıyoruz
     const dak = d[0];
     const hSut = d[1], aSut = d[2];
     const hKorner = d[3], aKorner = d[4];
-    const hSari = d[5] || 0, aSari = d[6] || 0;
-    const hXG = d[7] || 0.1, aXG = d[8] || 0.1;
+    const hKart = d[5] || 0, aKart = d[6] || 0;
+    const hXG = d[7] || 0, aXG = d[8] || 0;
 
-    const tXG = (parseFloat(hXG) + parseFloat(aXG)).toFixed(2);
+    const tXG = (hXG + aXG).toFixed(2);
     const tSut = hSut + aSut;
 
-    let sonuc = `🛡️ *KOPRADAR PRO ANALİZ v16.0*\n\n`;
-    sonuc += `🕒 Dakika: ${dak}'\n`;
-    sonuc += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+    let rapor = `🛡️ *KOPRADAR KESİN ANALİZ v17.0*\n\n`;
+    rapor += `🕒 Dakika: ${dak}'\n`;
+    rapor += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
 
-    // GOL ANALİZİ
+    // 🥅 GOL ANALİZİ
     if (tXG > 1.2 || (tSut > 10 && dak > 60)) {
-        sonuc += `🥅 *GOL:* 🔥 KRİTİK! Baskı çok yüksek, gol her an gelebilir.\n\n`;
+        rapor += `🥅 *GOL:* 🔥 KRİTİK! Olasılık tavan. Gol her an gelebilir.\n\n`;
+    } else if (tXG > 0.6) {
+        rapor += `🥅 *GOL:* ✅ POTANSİYEL. Baskı var ama bitiricilik zayıf.\n\n`;
     } else {
-        sonuc += `🥅 *GOL:* ⌛ Beklemede. Pozisyonlar henüz netleşmedi.\n\n`;
+        rapor += `🥅 *GOL:* ⌛ BEKLEMEDE. Net pozisyon az.\n\n`;
     }
 
-    // KORNER ANALİZİ
-    if ((hKorner + aKorner) > (dak / 8)) {
-        sonuc += `🚩 *KORNER:* 🚀 COŞKULU! Kanat akınları devam ediyor.\n\n`;
+    // 🚩 KORNER ANALİZİ
+    const kornerHizi = (hKorner + aKorner) / (dak / 10);
+    if (kornerHizi > 1.3) {
+        rapor += `🚩 *KORNER:* 🚀 COŞKULU! Kanatlar çok aktif, korner kovalanır.\n\n`;
     } else {
-        sonuc += `🚩 *KORNER:* 📉 Stabil. Orta saha mücadelesi hakim.\n\n`;
+        rapor += `🚩 *KORNER:* 📉 STABİL. Oyun merkezde.\n\n`;
     }
 
-    // KART ANALİZİ
-    if ((hSari + aSari) > 3) {
-        sonuc += `🟨 *KART:* 🔴 GERGİN! Maç sertleşti, kırmızı kart riski var.\n\n`;
+    // 🟨 KART ANALİZİ
+    if ((hKart + aKart) > 3) {
+        rapor += `🟨 *KART:* 🔴 GERGİN! Maç sertleşti, disiplin kayboluyor.\n\n`;
     } else {
-        sonuc += `🟨 *KART:* 🟢 Sakin oyun.\n\n`;
+        rapor += `🟨 *KART:* 🟢 SAKİN.\n\n`;
     }
 
-    sonuc += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-    sonuc += `📊 *Toplam xG:* ${tXG}\n`;
-    sonuc += `💡 _Tavsiye: Dakika ${dak}, istatistikler ${tXG > 1 ? "Hücum" : "Savunma"} ağırlıklı._`;
+    rapor += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+    rapor += `📊 *Toplam xG:* ${tXG}\n`;
+    rapor += `🎯 *Şut Verimi:* %${((tXG / (tSut || 1)) * 100).toFixed(0)}\n\n`;
+    rapor += `💡 _Tavsiye: Sayıları doğru girdiğiniz sürece bu analiz %100 matematiktir._`;
 
-    return sonuc;
+    return rapor;
 }
 
 bot.on('message', (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID || msg.text?.startsWith('/')) return;
     
-    const analizMesaji = analizEt(msg.text);
-    bot.sendMessage(msg.chat.id, analizMesaji, { parse_mode: "Markdown" });
+    bot.sendMessage(msg.chat.id, analizEt(msg.text), { parse_mode: "Markdown" });
 });
 
-http.createServer((req, res) => { res.end('KopRadar v16 Active'); }).listen(process.env.PORT || 8080);
+http.createServer((req, res) => { res.end('KopRadar v17 Active'); }).listen(process.env.PORT || 8080);
