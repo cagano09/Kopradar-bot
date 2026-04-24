@@ -4,93 +4,72 @@ const http = require('http');
 
 // ================= AYARLAR =================
 const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
-const API_KEY_1 = "82179df2de2549cc8d507a5b3b8804aa"; 
-const API_KEY_2 = "38db841187mshe4a6710f3f7be69p10c7ddjsn0e369c17c1fa"; 
+const SPORTMONKS_TOKEN = "gB0apFceXMQkAQveed0dQmPbju6urrCq6rz5xyJs9UYDkIUSMDwIwNOHTwif"; 
 const MY_CHAT_ID = "1094416843";
 const PORT = process.env.PORT || 8080;
 
-// BOTUN TANIMLANMASI (Hatanın çözümü burası)
 const bot = new TelegramBot(TOKEN, { polling: true });
-let cache = { matches: [] };
 
-const client1 = axios.create({
-    baseURL: 'https://api.football-data.org/v4',
-    headers: { 'X-Auth-Token': API_KEY_1 }
+const apiClient = axios.create({
+    baseURL: 'https://api.sportmonks.com/v3/football',
+    params: { api_token: SPORTMONKS_TOKEN }
 });
 
-// ANALİZ FONKSİYONU
-function hybridAnalysis(hT, aT, tableSize) {
-    const hRank = hT ? hT.position : 10;
-    const aRank = aT ? aT.position : 10;
-    const hPower = ((tableSize - (hRank - 1)) / tableSize) * 10;
-    const aPower = ((tableSize - (aRank - 1)) / tableSize) * 10;
-    const total = hPower + aPower + 3;
-    
-    return {
-        ms1: (1 / ((hPower / total) * 0.85)).toFixed(2),
-        msX: "3.45",
-        ms2: (1 / ((aPower / total) * 0.85)).toFixed(2),
-        scoreExp: ((hPower + aPower) / 5).toFixed(2)
-    };
-}
+// ================= ANALİZ MOTORU =================
 
-// ================= KOMUTLAR =================
-
-bot.onText(/\/liste/, async (msg) => {
+bot.onText(/\/canli/, async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    bot.sendMessage(msg.chat.id, "🔍 Maçlar taranıyor...");
+    bot.sendMessage(msg.chat.id, "📡 Sportmonks üzerinden canlı sahalar taranıyor...");
 
     try {
-        const resp = await client1.get('/matches');
-        const allMatches = resp.data.matches || [];
-        const today = new Date().toISOString().split('T')[0];
-        
-        // Bugünün ve planlanmış maçları al
-        cache.matches = allMatches.filter(m => m.utcDate.includes(today) || m.status === 'SCHEDULED' || m.status === 'LIVE');
-
-        if (cache.matches.length === 0) {
-            return bot.sendMessage(msg.chat.id, "📭 Şu an aktif maç bulunamadı.");
-        }
-
-        let report = `📋 *GÜNCEL HİBRİT BÜLTEN*\n\n`;
-        cache.matches.slice(0, 45).forEach(m => {
-            const icon = m.status === 'LIVE' ? '🔴' : '🕒';
-            report += `${icon} 🆔 \`${m.id}\` | ${m.competition.name}\n👉 ${m.homeTeam.shortName} - ${m.awayTeam.shortName}\n\n`;
+        // Canlı maçları; takım isimleri, lig bilgisi ve istatistiklerle beraber çekiyoruz
+        const resp = await apiClient.get('/fixtures/live', {
+            params: { 
+                include: 'statistics;participants;league',
+                'fields[statistics]': 'type_id,data',
+                'fields[participants]': 'name'
+            }
         });
+
+        const matches = resp.data.data || [];
+        if (matches.length === 0) return bot.sendMessage(msg.chat.id, "📭 Şu an aktif canlı maç bulunmuyor (Veya mevcut planınız bu ligleri kapsamıyor).");
+
+        let report = `🔥 *CANLI BASKI VE İSTATİSTİK RAPORU*\n\n`;
+        let count = 0;
+
+        matches.forEach(m => {
+            const homeTeam = m.participants.find(p => p.meta.location === 'home');
+            const awayTeam = m.participants.find(p => p.meta.location === 'away');
+            
+            // Korner ve Şut verilerini süzüyoruz (Type ID 34: Corner, 45: Shots on Goal - Sportmonks standartları)
+            const homeStats = m.statistics?.filter(s => s.location === 'home') || [];
+            const awayStats = m.statistics?.filter(s => s.location === 'away') || [];
+
+            // Basit bir fonksiyonla veriyi çekelim
+            const getStat = (stats, type) => stats.find(s => s.type_id === type)?.data?.value || 0;
+
+            const hCorner = getStat(homeStats, 34);
+            const aCorner = getStat(awayStats, 34);
+            const hShots = getStat(homeStats, 45);
+            const aShots = getStat(awayStats, 45);
+
+            report += `⚽ *${homeTeam.name} ${m.scores?.find(s => s.description === 'CURRENT')?.score?.goals || 0} - ${m.scores?.find(s => s.description === 'CURRENT')?.score?.goals || 0} ${awayTeam.name}*\n`;
+            report += `🕒 Dakika: ${m.minute}' | 🏆 ${m.league?.name}\n`;
+            report += `📊 Korner: ${hCorner}-${aCorner} | İ.Şut: ${hShots}-${aShots}\n`;
+            
+            // Baskı Algoritması: Bir takımın korner ve şut toplamı diğerinden çok üstünse yıldız koy
+            if ((hCorner + hShots) > (aCorner + aShots) + 4) report += `⚡ *Baskı: ${homeTeam.name} yükleniyor!*\n`;
+            if ((aCorner + aShots) > (hCorner + hShots) + 4) report += `⚡ *Baskı: ${awayTeam.name} yükleniyor!*\n`;
+            
+            report += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+            count++;
+        });
+
         bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
     } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Liste çekilemedi. API limiti dolmuş olabilir.");
+        console.error(e);
+        bot.sendMessage(msg.chat.id, "❌ Sportmonks hatası: Yetki yetersiz veya bağlantı koptu. (Not: Ücretsiz plan sadece belirli ligleri destekler)");
     }
 });
 
-bot.on('message', async (msg) => {
-    const text = msg.text?.trim();
-    if (!text || isNaN(text) || text.startsWith('/')) return;
-    
-    const match = cache.matches.find(m => String(m.id) === text);
-    if (!match) return;
-
-    bot.sendMessage(msg.chat.id, "🧬 Analiz ediliyor...");
-
-    try {
-        let hT, aT, tSize = 20;
-        try {
-            const stResp = await client1.get(`/competitions/${match.competition.code}/standings`);
-            const table = stResp.data.standings[0].table;
-            hT = table.find(t => t.team.id === match.homeTeam.id);
-            aT = table.find(t => t.team.id === match.awayTeam.id);
-            tSize = table.length;
-        } catch (err) {}
-
-        const res = hybridAnalysis(hT, aT, tSize);
-        let report = `📊 *${match.homeTeam.name} - ${match.awayTeam.name}*\n`;
-        report += `🎯 MS 1: **${res.ms1}** | MS X: **${res.msX}** | MS 2: **${res.ms2}**\n`;
-        report += `⚽ Gol Beklentisi: **${res.scoreExp}**\n`;
-        bot.sendMessage(msg.chat.id, report, { parse_mode: "Markdown" });
-    } catch (e) {
-        bot.sendMessage(msg.chat.id, "❌ Veri çekilemedi.");
-    }
-});
-
-// Render'da hata almamak için gerekli server
-http.createServer((req, res) => { res.end('KopRadar v11.2 Active'); }).listen(PORT);
+http.createServer((req, res) => { res.end('KopRadar Sportmonks Live Ready'); }).listen(PORT);
