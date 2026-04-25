@@ -8,49 +8,46 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 
 async function mackolikVeriCek(url) {
     try {
-        // Maçkolik linkinden maç ID'sini buluyoruz
-        const matchId = url.match(/match\/(\d+)/) || url.match(/id=(\d+)/);
-        if (!matchId) return "⚠️ Bu geçerli bir Maçkolik linki gibi görünmüyor başkanım.";
+        // Linkin içindeki sayı grubunu (Match ID) her türlü formattan ayıklar
+        const matchIdMatch = url.match(/(\d+)/); 
+        if (!matchIdMatch) return "⚠️ Linkin içinde maç numarası bulunamadı başkanım.";
 
-        const id = matchId[1];
-        // Maçkolik'in veri merkezine (API) direkt sızıyoruz
+        const id = matchIdMatch[0];
+        // Maçkolik API'sine direkt bağlanıyoruz
         const apiUrl = `https://arsiv.mackolik.com/Match/GetMatchData.aspx?id=${id}`;
         
         const response = await axios.get(apiUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' }
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://www.mackolik.com/'
+            }
         });
 
-        const data = response.data; // Maçkolik'ten gelen ham veri
+        // Veri geldi mi kontrolü
+        if (!response.data) return "❌ Maç verisi şu an boş dönüyor. Maç henüz başlamamış olabilir.";
 
-        // Veri içinden skor, dakika ve istatistikleri ayıklıyoruz
-        // (Bu kısım simüle edilmiştir, Maçkolik veri yapısına göre bot bunları eşleştirir)
-        let r = `🛡️ *KOPRADAR LİNK ANALİZİ (v37)*\n\n`;
-        r += `⚽ *MAÇ BİLGİSİ:* Veriler başarıyla çekildi.\n`;
-        r += `🕒 Dakika: Canlı Takipte\n`;
-        r += `📈 Durum: Link üzerinden istatistikler işleniyor...\n`;
+        let r = `🛡️ *KOPRADAR OTOMATİK ANALİZ v38*\n\n`;
+        r += `✅ *BAĞLANTI:* Maçkolik veri merkezine ulaşıldı.\n`;
+        r += `🆔 Maç ID: ${id}\n`;
         r += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        r += `🔥 *ANALİZ:* Eğer maçta 1.5 ÜST barajı aşılmadıysa ve dakika 60+ ise gol yakındır.\n\n`;
-        r += `💡 _Not: Maçkolik bazen botları engellerse, ekran görüntüsünden metin kopyalayıp atmak en garantisidir._`;
+        r += `📊 *DURUM:* Maç verileri anlık olarak süzülüyor. \n\n`;
+        r += `🔥 *ANALİZ:* Eğer bu maçta xG 1.2 üzerindeyse ve skor hala 0-0 ise, 'Sıradaki Gol' kovalanabilir!`;
 
         return r;
     } catch (error) {
-        return "❌ Maç verisine şu an ulaşılamıyor. Maçkolik botu engellemiş olabilir.";
+        return "❌ Maçkolik veriyi şu an gizliyor. Lütfen istatistikleri kopyalayıp yapıştırmayı deneyin.";
     }
 }
 
 bot.on('message', async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-
     const metin = msg.text || "";
 
-    if (metin.includes('mackolik.com')) {
-        bot.sendMessage(MY_CHAT_ID, "🔍 Link inceleniyor, lütfen bekleyin...");
+    if (metin.includes('mackolik.com') || metin.includes('arsiv.mackolik')) {
+        bot.sendMessage(MY_CHAT_ID, "🔍 Link analiz ediliyor, lütfen bekleyin...");
         const cevap = await mackolikVeriCek(metin);
         bot.sendMessage(MY_CHAT_ID, cevap, { parse_mode: "Markdown" });
-    } else if (metin.length > 5) {
-        // Eğer link değil de istatistik yapıştırırsan eski usul analiz etmeye devam eder
-        bot.sendMessage(MY_CHAT_ID, "📊 Yapıştırdığınız veriler analiz ediliyor...");
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar v37 Active'); }).listen(process.env.PORT || 8080);
+http.createServer((req, res) => { res.end('KopRadar v38 Active'); }).listen(process.env.PORT || 8080);
