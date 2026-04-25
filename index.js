@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const Tesseract = require('tesseract.js');
 const axios = require('axios');
 const http = require('http');
 
@@ -6,43 +7,52 @@ const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
 const MY_CHAT_ID = "1094416843";
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-async function googleCanliSkor(sorgu) {
-    try {
-        // Google üzerinden maç verilerini tarayan bir API simülasyonu
-        // Not: Bu kısım Google'ın hızlı sonuçlarını (Snippet) temel alır
-        const aramaUrl = `https://www.google.com/search?q=${encodeURIComponent(sorgu + " canlı skor")}`;
-        
-        const response = await axios.get(aramaUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
+// Analiz Motoru
+function analizEt(metin) {
+    const sayilar = metin.match(/\d+(\.\d+)?/g)?.map(Number) || [];
+    if (sayilar.length < 3) return "⚠️ Yeterli veri bulunamadı.";
 
-        // Google'dan gelen veriyi analiz ediyoruz
-        let r = `🛡️ *KOPRADAR GOOGLE ANALİZ v47*\n\n`;
-        r += `🔍 *ARANAN:* ${sorgu.toUpperCase()}\n`;
-        r += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-        r += `📊 *DURUM:* Google verileri taranıyor...\n`;
-        r += `✅ *İPUCU:* Maçın dakikasını ve skorunu bota direkt "65 dk 2-1" gibi yazarsanız, xG tahminini anında yapar.\n\n`;
-        r += `🔥 *STRATEJİ:* Google'da dakika 75+ ise ve skor berabereyse '0.5 ÜST' kovalayabilirsiniz.`;
+    const dak = sayilar.find(n => n > 0 && n < 105) || "??";
+    const xGler = sayilar.filter(n => n > 0 && n < 6 && n.toString().includes('.'));
+    const tXG = ( (xGler[0] || 0) + (xGler[1] || 0) ).toFixed(2);
 
-        return r;
-    } catch (e) {
-        return "❌ Google servislerine şu an ulaşılamıyor, lütfen manuel veri girin.";
-    }
+    let r = `🛡️ *KOPRADAR v50 (GÖRSEL/METİN)*\n\n`;
+    r += `🕒 Dakika: ${dak}' | 📈 Toplam xG: ${tXG}\n`;
+    r += `〰️〰️〰️〰️〰️〰️〰️\n`;
+    r += tXG > 1.2 ? "🔥 *GOL SİNYALİ:* Baskı yüksek!" : "⌛ *BEKLEMEDE:* Tempo düşük.";
+    return r;
 }
 
-bot.on('message', async (msg) => {
+// Resim Geldiğinde Çalışacak Kısım
+bot.on('photo', async (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    
-    const metin = msg.text || "";
 
-    if (metin.length > 3 && !metin.includes('http')) {
-        // Sadece takım adı yazıldığında Google'a sorar
-        bot.sendMessage(MY_CHAT_ID, `📡 ${metin} için Google verileri sorgulanıyor...`);
-        const sonuc = await googleCanliSkor(metin);
-        bot.sendMessage(MY_CHAT_ID, sonuc, { parse_mode: "Markdown" });
-    } else if (metin.includes('http')) {
-        bot.sendMessage(MY_CHAT_ID, "⚠️ Link yerine sadece TAKIM ADI yazmayı deneyin başkanım.");
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, "📸 Resim alındı, " + (msg.caption || "maç") + " verileri okunuyor...");
+
+    try {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        const fileUrl = await bot.getFileLink(fileId);
+
+        // OCR ile resimdeki yazıları oku
+        const { data: { text } } = await Tesseract.recognize(fileUrl, 'eng');
+        const sonuc = analizEt(text);
+        bot.sendMessage(chatId, sonuc, { parse_mode: "Markdown" });
+    } catch (e) {
+        bot.sendMessage(chatId, "❌ Resim okunurken bir hata oluştu.");
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar Google Mode Active'); }).listen(process.env.PORT || 8080);
+// Metin Geldiğinde Çalışacak Kısım
+bot.on('message', async (msg) => {
+    if (msg.chat.id.toString() !== MY_CHAT_ID || msg.photo) return;
+    
+    const metin = msg.text || "";
+    if (metin.length > 3) {
+        bot.sendMessage(MY_CHAT_ID, "🔍 Metin üzerinden analiz yapılıyor...");
+        const sonuc = analizEt(metin);
+        bot.sendMessage(MY_CHAT_ID, sonuc, { parse_mode: "Markdown" });
+    }
+});
+
+http.createServer((req, res) => { res.end('KopRadar v50 Ready'); }).listen(process.env.PORT || 8080);
