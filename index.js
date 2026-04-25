@@ -5,34 +5,33 @@ const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
 const MY_CHAT_ID = "1094416843";
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-function akilliSüzgeç(metin) {
-    const sayilar = metin.match(/\d+(\.\d+)?/g)?.map(Number) || [];
-    if (sayilar.length < 5) return "❌ Veri okunamadı. Lütfen istatistikleri seçip paylaşın.";
-
-    // Veri Haritası: Dakika, Skor, xG, Şut, Korner
-    const d = {
-        dak: sayilar[0] || 0,
-        sH: sayilar[1] || 0, sA: sayilar[2] || 0,
-        xGH: sayilar[3] || 0.1, xGA: sayilar[4] || 0.1,
-        korH: sayilar[sayilar.length - 2] || 0, korA: sayilar[sayilar.length - 1] || 0
-    };
-
-    const tXG = (d.xGH + d.xGA).toFixed(2);
-    let mesaj = `🛡️ *KOPRADAR ANALİZ v23.0*\n\n`;
-    mesaj += `🕒 Dakika: ${d.dak}' | 🏟️ Skor: ${d.sH}-${d.sA}\n`;
-    mesaj += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-
-    if (tXG > 1.5) mesaj += `⚽ *GOL SİNYALİ:* Toplam xG (${tXG}) çok yüksek. Maç hareketli!\n\n`;
-    else if (d.sH < d.sA && d.xGH > 0.8) mesaj += `🔥 *BASKI EVDE:* Ev sahibi geride ama ciddi bastırıyor.\n\n`;
-    else mesaj += `⌛ *DENGELİ:* Oyun şu an stabil görünüyor.\n\n`;
-
-    mesaj += `🚩 Korner: ${d.korH}-${d.korA} | 📊 xG: ${tXG}\n`;
-    return mesaj;
-}
-
 bot.on('message', (msg) => {
     if (msg.chat.id.toString() !== MY_CHAT_ID || msg.text?.startsWith('/')) return;
-    bot.sendMessage(msg.chat.id, akilliSüzgeç(decodeURIComponent(msg.text)), { parse_mode: "Markdown" });
+
+    try {
+        const temizMetin = decodeURIComponent(msg.text);
+        const s = temizMetin.match(/\d+(\.\d+)?/g)?.map(Number) || [];
+
+        if (s.length < 4) return bot.sendMessage(msg.chat.id, "⚠️ Veri tam gelmedi, lütfen istatistikleri daha geniş seçin.");
+
+        const dak = s[0], sH = s[1], sA = s[2];
+        const xGler = s.filter(n => n > 0 && n < 5 && n.toString().includes('.'));
+        const xGH = xGler[0] || 0.1, xGA = xGler[1] || 0.1;
+        const tXG = (xGH + xGA).toFixed(2);
+
+        let r = `🛡️ *KOPRADAR CANLI ANALİZ v26.0*\n\n`;
+        r += `🕒 Dakika: ${dak}' | 🏟️ Skor: ${sH}-${sA}\n`;
+        r += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
+
+        if (tXG > 1.3) r += `🔥 *TEHLİKE:* Toplam xG (${tXG}) yüksek! Gol kokusu var.\n\n`;
+        else if (sH < sA && xGH > 0.7) r += `💪 *EV BASKISI:* Ev sahibi skoru değiştirmek için yükleniyor.\n\n`;
+        else r += `⌛ *KONTROLLÜ:* Maç şu an dengeli bir tempoda.\n\n`;
+
+        r += `📊 Toplam Beklenen Gol (xG): ${tXG}\n`;
+        bot.sendMessage(msg.chat.id, r, { parse_mode: "Markdown" });
+    } catch (e) {
+        console.error(e);
+    }
 });
 
-http.createServer((req, res) => { res.end('Kestirme Hazır'); }).listen(process.env.PORT || 8080);
+http.createServer((req, res) => { res.end('KopRadar Shortcuts v26 Live'); }).listen(process.env.PORT || 8080);
