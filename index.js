@@ -5,34 +5,34 @@ const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
 const MY_CHAT_ID = "1094416843";
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-function detayliAnaliz(metin) {
-    const s = metin.match(/\d+(\.\d+)?/g)?.map(Number) || [];
-    if (s.length < 3) return "⚠️ Gelen veride yeterli sayı bulunamadı:\n\n" + metin;
+bot.on('message', (msg) => {
+    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
 
-    const dak = s[0], sH = s[1], sA = s[2];
-    const xGler = s.filter(n => n > 0 && n < 6 && n.toString().includes('.'));
+    const metin = msg.text || "";
+    // Sayıları ayıkla
+    const s = metin.match(/\d+(\.\d+)?/g)?.map(Number) || [];
+
+    if (s.length < 3) {
+        return bot.sendMessage(MY_CHAT_ID, "📊 *KOPRADAR:* Veri alındı ancak içinde analiz edilecek sayı bulunamadı. Lütfen istatistik panelini seçerek paylaşın.");
+    }
+
+    // Akıllı Eşleştirme
+    const dak = s[0];
+    const sH = s[1], sA = s[2];
+    const xGler = s.filter(n => n.toString().includes('.') && n < 6);
     const xGH = xGler[0] || 0.0, xGA = xGler[1] || 0.0;
     const tXG = (xGH + xGA).toFixed(2);
 
-    let r = `🛡️ *KOPRADAR ANALİZ v26.0*\n\n`;
-    r += `🕒 Dakika: ${dak}' | 🏟️ Skor: ${sH}-${sA}\n`;
-    r += `📊 Toplam xG: ${tXG}\n`;
-    r += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
-    
-    if (tXG > 1.0) r += `🔥 *BASKI:* Maçta gol beklentisi artıyor.\n`;
-    else r += `⌛ *DURAĞAN:* Pozisyonlar henüz net değil.\n`;
+    let rapor = `🛡️ *KOPRADAR PRO v31.0*\n\n`;
+    rapor += `🕒 Dakika: ${dak}' | 🏟️ Skor: ${sH}-${sA}\n`;
+    rapor += `📊 Toplam xG: ${tXG} (E:${xGH} / D:${xGA})\n`;
+    rapor += `〰️〰️〰️〰️〰️〰️〰️〰️〰️\n`;
 
-    return r;
-}
+    if (tXG > 1.4) rapor += `⚽ *TEHLİKE:* Gol beklentisi çok yüksek, tempo artıyor!\n`;
+    else if (sH === sA && tXG > 0.8) rapor += `🔥 *KİLİT:* Eşitlik bozulmak üzere, baskı yoğun.\n`;
+    else rapor += `⌛ *KONTROLLÜ:* Takımlar şu an dengeli oynuyor.\n`;
 
-bot.on('message', (msg) => {
-    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
-    
-    // Test amaçlı: Bot ne aldığını görsün
-    console.log("Gelen Veri:", msg.text);
-    
-    const rapor = detayliAnaliz(msg.text);
-    bot.sendMessage(msg.chat.id, rapor, { parse_mode: "Markdown" });
+    bot.sendMessage(MY_CHAT_ID, rapor, { parse_mode: "Markdown" });
 });
 
-http.createServer((req, res) => { res.end('KopRadar v26 Active'); }).listen(process.env.PORT || 8080);
+http.createServer((req, res) => { res.end('KopRadar v31 Ready'); }).listen(process.env.PORT || 8080);
