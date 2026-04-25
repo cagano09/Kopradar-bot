@@ -1,13 +1,14 @@
 {
   "name": "kopradar-bot",
   "version": "1.0.0",
-  "description": "Football Analysis Bot",
+  "description": "Football Image and Text Analyzer",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "tesseract.js": "^5.0.4"
   }
 }
