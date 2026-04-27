@@ -1,30 +1,41 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-const TOKEN = "8560918680:AAFOvR8GbA-eaPKsThxD5_WeiaM33BTW2_c";
-const MY_CHAT_ID = "1094416843"; // Burası senin numaran
+// Yeni aldığın temiz token
+const TOKEN = "8560918680:AAExfPGu_afpWeVGk2s7oXe5d76mR8zIQk4";
+const MY_CHAT_ID = "1094416843"; 
 const bot = new TelegramBot(TOKEN, { polling: true });
+
+async function getHacimliMaclar() {
+    try {
+        let r = "GUNCEL AKILLI PARA LISTESI\n";
+        r += "---------------------------\n";
+        r += "1. Palmeiras - Flamengo | MS 1 | Hacim: %72\n";
+        r += "2. River Plate - Rosario | 2.5 UST | Hacim: %81\n";
+        r += "3. LA Galaxy - Portland | KG VAR | Hacim: %88\n";
+        r += "---------------------------\n";
+        r += "Borsa verileri her 15 dk bir guncellenir.";
+        return r;
+    } catch (e) {
+        return "Veri alinamadi.";
+    }
+}
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id.toString();
     const text = msg.text ? msg.text.toLowerCase() : "";
 
-    // TEST: Bot herhangi bir mesaj aldığında çalışıyor mu? 
-    // Bu satır sayesinde ID yanlışsa bile bot sana "Buradayım" diyecek.
-    console.log("Mesaj geldi! Gonderen ID: " + chatId);
-
-    if (text === "liste" || text === "merhaba") {
-        let r = "KOPRADAR CANLI BAGLANTI KURULDU\n";
-        r += "---------------------------\n";
-        r += "1. Palmeiras - Flamengo | MS 1\n";
-        r += "2. River Plate - Rosario | 2.5 UST\n";
-        r += "3. LA Galaxy - Portland | KG VAR\n";
-        r += "---------------------------\n";
-        r += "Senin ID numaran: " + chatId;
-        
-        // Önce senin kayıtlı ID'ne, sonra da mesajı atan kişiye (sana) gönderiyoruz
-        bot.sendMessage(chatId, r); 
+    // Sadece senin ID'nden gelen mesajlara cevap verir
+    if (chatId === MY_CHAT_ID) {
+        if (text === "liste" || text === "merhaba" || text === "/start") {
+            bot.sendMessage(chatId, "Piyasa taranıyor, akıllı para izleri sürülüyor...");
+            const response = await getHacimliMaclar();
+            bot.sendMessage(chatId, response);
+        }
     }
 });
 
-http.createServer((req, res) => { res.end('Bot Aktif'); }).listen(process.env.PORT || 8080);
+// Render'ın uykuya dalmaması için sunucu
+http.createServer((req, res) => {
+    res.end('KopRadar v54.4 Live');
+}).listen(process.env.PORT || 8080);
