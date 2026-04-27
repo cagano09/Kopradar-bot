@@ -1,14 +1,13 @@
 {
-  "name": "kopradar-bot",
+  "name": "kopradar-borsa-bot",
   "version": "1.0.0",
-  "description": "Football Image and Text Analyzer",
+  "description": "Smart Money Tracker",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "axios": "^1.6.0",
-    "tesseract.js": "^5.0.4"
+    "axios": "^1.6.0"
   }
 }
