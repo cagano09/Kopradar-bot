@@ -4,49 +4,70 @@ const http = require('http');
 
 const TOKEN = "8560918680:AAExfPGu_afpWeVGk2s7oXe5d76mR8zIQk4";
 const MY_CHAT_ID = "1094416843";
+const API_KEY = "34f7101f120aeecf6f4e14e8e2d88d6e"; // Senin verdiğin Odds API Key
+
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// TARIH VE SAAT BILGISI
-function getTarih() {
-    return new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-}
+async function getLiveOdds() {
+    try {
+        // Dünyadaki güncel futbol maçlarını ve oranlarını çeker
+        const url = `https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey=${API_KEY}&regions=eu&markets=h2h&bookmakers=pinnacle,betfair_ex_uk`;
+        
+        const response = await axios.get(url);
+        const data = response.data;
 
-async function getBorsaVerisi() {
-    // Burada hata almamak için veriyi en güvenilir kaynaktan simüle ediyoruz
-    // Zümre başkanım, buradaki maçları ben senin için her gün güncelleyebilirim 
-    // veya buraya dinamik bir RSS beslemesi bağlayabiliriz.
-    
-    let r = "📊 *KOPRADAR SMART MONEY RAPORU*\n";
-    r += `📅 *Guncelleme:* ${getTarih()}\n`;
-    r += "---------------------------\n\n";
+        if (!data || data.length === 0) {
+            return "⚠️ Şu an aktif veya yakında başlayacak maç bulunamadı.";
+        }
 
-    // 28 NİSAN GECE CANLI VERİLERİ
-    const maclar = [
-        { mac: "Velez Sarsfield - Tigre", pazar: "MS 1", hacim: "$158.400", durum: "📈 %12 Artis" },
-        { mac: "Sao Paulo - Gremio", pazar: "2.5 UST", hacim: "$112.900", durum: "🔥 Sicak Para" },
-        { mac: "Seattle - Houston", pazar: "KG VAR", hacim: "$234.000", durum: "🚀 Rekor Hacim" }
-    ];
+        let r = "🏆 *BORSA CANLI ANALİZ (İLK 10 MAÇ)*\n";
+        r += `📅 *Tarih:* ${new Date().toLocaleString('tr-TR')}\n`;
+        r += "---------------------------\n\n";
 
-    maclar.forEach((m, i) => {
-        r += `${i + 1}. 🏟 *${m.mac}*\n`;
-        r += `🎯 *Tercih:* ${m.pazar} | 💰 *Para:* ${m.hacim}\n`;
-        r += `📝 *Analiz:* ${m.durum}\n`;
-        r += `---------------------------\n`;
-    });
+        // İlk 10 maçı alalım
+        const top10 = data.slice(0, 10);
 
-    r += "\n⚠️ *Not:* Veriler Betfair Exchange global piyasasindan anlık alınmıştır.";
-    return r;
+        top10.forEach((m, i) => {
+            const evSahibi = m.home_team;
+            const deplasman = m.away_team;
+            const lig = m.sport_title;
+            
+            // Betfair veya Pinnacle oranlarını çekmeye çalışalım
+            let oranlar = "Oranlar yükleniyor...";
+            if (m.bookmakers && m.bookmakers[0]) {
+                const outcome = m.bookmakers[0].markets[0].outcomes;
+                oranlar = `1: ${outcome[0].price} | X: ${outcome[2].price} | 2: ${outcome[1].price}`;
+            }
+
+            r += `${i + 1}. 🏟 *${evSahibi} - ${deplasman}*\n`;
+            r += `🏆 *Lig:* ${lig}\n`;
+            r += `📊 *Oranlar:* ${oranlar}\n`;
+            r += `---------------------------\n`;
+        });
+
+        r += "\n✅ *Veriler Betfair/Pinnacle üzerinden anlık çekilmiştir.*";
+        return r;
+
+    } catch (error) {
+        console.error(error);
+        return "❌ API bağlantı hatası! Lütfen anahtar limitini veya internet bağlantısını kontrol et başkanım.";
+    }
 }
 
 bot.on('message', async (msg) => {
-    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
+    const chatId = msg.chat.id.toString();
+    if (chatId !== MY_CHAT_ID) return;
+
     const text = msg.text ? msg.text.toLowerCase() : "";
 
-    if (text === "liste") {
-        bot.sendMessage(MY_CHAT_ID, "📡 Betfair verileri analiz ediliyor...");
-        const rapor = await getBorsaVerisi();
-        bot.sendMessage(MY_CHAT_ID, rapor, { parse_mode: "Markdown" });
+    if (text === "liste" || text === "/start") {
+        bot.sendMessage(chatId, "📡 Dünya borsaları taranıyor, gerçek zamanlı veriler çekiliyor...");
+        const rapor = await getLiveOdds();
+        bot.sendMessage(chatId, rapor, { parse_mode: "Markdown" });
     }
 });
 
-http.createServer((req, res) => { res.end('KopRadar Engine Active'); }).listen(process.env.PORT || 8080);
+// Render için basit sunucu
+http.createServer((req, res) => {
+    res.end('KopRadar API Engine v59.0 Live');
+}).listen(process.env.PORT || 8080);
