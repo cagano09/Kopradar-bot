@@ -4,70 +4,61 @@ const http = require('http');
 
 const TOKEN = "8560918680:AAExfPGu_afpWeVGk2s7oXe5d76mR8zIQk4";
 const MY_CHAT_ID = "1094416843";
-const API_KEY = "34f7101f120aeecf6f4e14e8e2d88d6e"; // Senin verdiğin Odds API Key
+const API_KEY = "34f7101f120aeecf6f4e14e8e2d88d6e";
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-async function getLiveOdds() {
+async function getBorsaListesi() {
     try {
-        // Dünyadaki güncel futbol maçlarını ve oranlarını çeker
-        const url = `https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey=${API_KEY}&regions=eu&markets=h2h&bookmakers=pinnacle,betfair_ex_uk`;
-        
+        // Betfair Exchange verilerine odaklanıyoruz
+        const url = `https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey=${API_KEY}&regions=eu&markets=h2h&bookmakers=betfair_ex_uk`;
         const response = await axios.get(url);
         const data = response.data;
 
-        if (!data || data.length === 0) {
-            return "⚠️ Şu an aktif veya yakında başlayacak maç bulunamadı.";
-        }
+        if (!data || data.length === 0) return "⚠️ Şu an aktif borsa verisi bulunamadı.";
 
-        let r = "🏆 *BORSA CANLI ANALİZ (İLK 10 MAÇ)*\n";
+        let r = "🏦 *BETFAIR EXCHANGE CANLI TAKİP LİSTESİ*\n";
         r += `📅 *Tarih:* ${new Date().toLocaleString('tr-TR')}\n`;
         r += "---------------------------\n\n";
 
-        // İlk 10 maçı alalım
         const top10 = data.slice(0, 10);
 
         top10.forEach((m, i) => {
-            const evSahibi = m.home_team;
-            const deplasman = m.away_team;
+            const ev = m.home_team;
+            const dep = m.away_team;
             const lig = m.sport_title;
             
-            // Betfair veya Pinnacle oranlarını çekmeye çalışalım
-            let oranlar = "Oranlar yükleniyor...";
+            let oranSatiri = "";
             if (m.bookmakers && m.bookmakers[0]) {
-                const outcome = m.bookmakers[0].markets[0].outcomes;
-                oranlar = `1: ${outcome[0].price} | X: ${outcome[2].price} | 2: ${outcome[1].price}`;
+                const outcomes = m.bookmakers[0].markets[0].outcomes;
+                oranSatiri = `📊 *Oranlar:* 1: ${outcomes[0].price} | X: ${outcomes[2].price} | 2: ${outcomes[1].price}`;
             }
 
-            r += `${i + 1}. 🏟 *${evSahibi} - ${deplasman}*\n`;
+            // Betfair'de bu maçın hacmini görebileceğin resmi arama linki
+            const borsaLink = `https://www.betfair.com/exchange/plus/football/search/${encodeURIComponent(ev)}`;
+
+            r += `${i + 1}. 🏟 *${ev} - ${dep}*\n`;
             r += `🏆 *Lig:* ${lig}\n`;
-            r += `📊 *Oranlar:* ${oranlar}\n`;
+            r += `${oranSatiri}\n`;
+            r += `🔗 [Gerçek Para Hacmini Gör](${borsaLink})\n`;
             r += `---------------------------\n`;
         });
 
-        r += "\n✅ *Veriler Betfair/Pinnacle üzerinden anlık çekilmiştir.*";
+        r += "\n✅ *Linke tıklayarak Betfair üzerindeki 'Matched' (Eşleşen Para) miktarını resmi siteden görebilirsiniz.*";
         return r;
 
     } catch (error) {
-        console.error(error);
-        return "❌ API bağlantı hatası! Lütfen anahtar limitini veya internet bağlantısını kontrol et başkanım.";
+        return "❌ Borsa bağlantı hatası oluştu.";
     }
 }
 
 bot.on('message', async (msg) => {
-    const chatId = msg.chat.id.toString();
-    if (chatId !== MY_CHAT_ID) return;
-
-    const text = msg.text ? msg.text.toLowerCase() : "";
-
-    if (text === "liste" || text === "/start") {
-        bot.sendMessage(chatId, "📡 Dünya borsaları taranıyor, gerçek zamanlı veriler çekiliyor...");
-        const rapor = await getLiveOdds();
-        bot.sendMessage(chatId, rapor, { parse_mode: "Markdown" });
+    if (msg.chat.id.toString() !== MY_CHAT_ID) return;
+    if (msg.text?.toLowerCase() === "liste") {
+        bot.sendMessage(MY_CHAT_ID, "📡 Canlı borsa taranıyor...");
+        const rapor = await getBorsaListesi();
+        bot.sendMessage(MY_CHAT_ID, rapor, { parse_mode: "Markdown", disable_web_page_preview: true });
     }
 });
 
-// Render için basit sunucu
-http.createServer((req, res) => {
-    res.end('KopRadar API Engine v59.0 Live');
-}).listen(process.env.PORT || 8080);
+http.createServer((req, res) => { res.end('KopRadar Official Link Engine v61.0'); }).listen(process.env.PORT || 8080);
